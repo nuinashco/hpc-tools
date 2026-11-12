@@ -1,0 +1,69 @@
+# Installed by `make setup` (pre-commit and commit-msg stages).
+default_stages: [pre-commit]  # Only the commit-msg hooks run at that stage.
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: check-added-large-files
+      - id: check-merge-conflict
+      - id: check-json
+      - id: check-toml
+      - id: check-yaml
+      - id: end-of-file-fixer
+      - id: trailing-whitespace
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.30.1
+    hooks:
+      - id: gitleaks
+  - repo: https://github.com/compilerla/conventional-pre-commit
+    rev: v4.4.0
+    hooks:
+      - id: conventional-pre-commit
+        stages: [commit-msg]
+        args: [build, chore, ci, docs, feat, fix, perf, refactor, revert, style, test]
+  - repo: local
+    hooks:
+      # Local hooks run the versions pinned in uv.lock, the same ones `make check` uses.
+      - id: uv-lock
+        name: uv.lock is up to date
+        entry: uv lock --check
+        language: system
+        files: ^(pyproject\.toml|uv\.lock)$
+        pass_filenames: false
+      - id: ruff-check
+        name: ruff check
+        entry: uv run ruff check --force-exclude
+        language: system
+        types_or: [python, pyi]
+      - id: ruff-format
+        name: ruff format
+        entry: uv run ruff format --check --force-exclude
+        language: system
+        types_or: [python, pyi]
+      - id: pyright
+        name: pyright
+        entry: uv run pyright
+        language: system
+        types: [python]
+        pass_filenames: false
+      - id: check-comments
+        name: comments are sentences, no banners (GUIDE DOC)
+        entry: uv run check-comments
+        language: system
+        types: [python]
+      - id: check-commit-msg
+        name: commit message is one line without articles (GUIDE GIT-1, GIT-2)
+        entry: uv run check-commit-msg
+        language: system
+        stages: [commit-msg]
+      - id: plugin-versions
+        name: a changed plugin has a new version
+        entry: uv run python tools/check_plugin_versions.py
+        language: system
+        pass_filenames: false
+        always_run: true
+      - id: ascii-only-python
+        name: ASCII-only .py files (GUIDE STY-8)
+        entry: "[^\\x00-\\x7F]"
+        language: pygrep
+        types: [python]

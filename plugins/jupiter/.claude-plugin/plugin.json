@@ -1,0 +1,8 @@
+{
+  "name": "jupiter",
+  "displayName": "JUPITER",
+  "description": "Work on JSC's JUPITER supercomputer from any project: check access, copy code, submit Slurm jobs with a cost check, watch them and read the budget",
+  "version": "0.1.0",
+  "author": { "name": "nuinashco" },
+  "keywords": ["hpc", "slurm", "jupiter", "jsc"]
+}

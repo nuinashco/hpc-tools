@@ -1,0 +1,12 @@
+{
+  "name": "hpc-tools",
+  "description": "Claude Code plugins for HPC systems, one plugin per system",
+  "owner": { "name": "nuinashco" },
+  "plugins": [
+    {
+      "name": "jupiter",
+      "source": "./plugins/jupiter",
+      "description": "JSC's JUPITER (Juelich): check access, copy code, submit Slurm jobs with a cost check, watch them, read the budget"
+    }
+  ]
+}

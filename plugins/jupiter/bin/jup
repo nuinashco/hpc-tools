@@ -1,0 +1,19 @@
+#!/usr/bin/env -S python3 -I
+"""Start `jup` from the plugin's own copy of its code.
+
+Isolated (-I), so that neither the directory it is run in nor PYTHONPATH can put
+another module in front of the standard library's.
+"""
+
+import sys
+from pathlib import Path
+
+# Whatever python3 the machine has starts this file, so it checks for itself.
+if sys.version_info < (3, 9):  # noqa: UP036
+    sys.exit("jup: needs Python 3.9 or later; this python3 is older")
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "lib"))
+
+from jup.cli import main
+
+sys.exit(main())

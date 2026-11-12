@@ -1,0 +1,145 @@
+# jupiter
+
+A Claude Code plugin for JSC's [JUPITER](https://apps.fz-juelich.de/jsc/hps/jupiter/) supercomputer: it checks
+access, copies a project there, submits Slurm jobs with a cost check, watches them and reads the budget.
+
+JUPITER has two properties that an agent gets wrong without help. Every new SSH connection needs a TOTP code only
+you can type, and every job spends a budget you share with your project. The plugin is built around both: it
+works through one connection that you open, and it prices a job before submitting it.
+
+## Install
+
+```text
+/plugin marketplace add nuinashco/hpc-tools
+/plugin install jupiter@hpc-tools
+```
+
+Then `/jupiter:setup`, or ask Claude to set up JUPITER for the repository you are in.
+
+## What you get
+
+| | |
+|---|---|
+| Skill `cluster` | facts and rules for JUPITER: access, the partition and its limits, billing, storage, modules, containers, pitfalls |
+| Skill `setup` (`/jupiter:setup`) | first-time setup for a person or a repository |
+| Skill `submit` (`/jupiter:submit`) | batch script, copy, cheap checks, a small test, then the real submission |
+| Skill `jobs` (`/jupiter:jobs`) | queue, waiting, output, why a job failed or waits, cancelling, results, cost |
+| Command `jup` | what the skills run; on the Bash tool's PATH while the plugin is enabled |
+| Cost check (a hook before each Bash command) | Claude Code asks you before a submission to JUPITER above your limits, or one whose cost cannot be read for certain |
+| Session note (a hook at session start) | in a repository with a `.jupiter.json`, tells Claude the account, the remote directory and whether the connection is open |
+
+Claude loads the skills by itself when you mention JUPITER or ask to run something there.
+
+## The `jup` command
+
+```text
+jup doctor [--probe]            check settings, SSH and the account
+jup config [set KEY VALUE [--project]]
+jup ssh [-C] COMMAND...         run a command on the login node (-C: in the project)
+jup push [--dry-run] [--all]    copy the project to the cluster
+jup pull PATTERN... [--to DIR] [--dry-run]
+jup cost SBATCH_ARGS...         what a submission would reserve and cost
+jup submit [--dry-run] SBATCH_ARGS...
+jup jobs [--days N]             queued, running and recent jobs
+jup wait JOB [--until-running]  print each state change until the job ends
+jup logs JOB [-n LINES]         the end of a job's output
+jup cancel JOB...
+jup budget                      the account's core-hours
+```
+
+It needs Python 3.9 or later (the one that comes with Apple's command line tools is enough), `ssh`, `rsync` and
+`git`, and nothing else. With Claude Code's Bash sandbox switched on, `ssh` cannot reach the shared connection and
+`jup` reports it as closed: allow `jup` to run outside the sandbox there.
+
+- **The connection is yours.** Every command that reaches the cluster goes through the connection you opened with
+  `ssh hpc-jupiter true`. When it is closed, `jup` says so and exits with code 66. It never asks for your TOTP
+  code or your key's passphrase and never opens a connection itself, because JSC blocks addresses that connect
+  too often. The one exception is `jup doctor --probe`: a single login attempt without prompts, to tell a refused
+  key from a missing code, plus a request to api.ipify.org for your public address.
+- **`jup push`** copies what git tracks or would add, so ignored files stay on your machine, and it leaves out
+  files whose names say they hold secrets (`.env`, `*.pem`, `id_ed25519`, ...). What it copies can be read by the
+  other members of your compute project. It replaces files that differ, deletes nothing on the cluster, and
+  writes the commit it copied to `.synced_from` beside the copy. A directory that is no git repository is copied
+  only with `--all`.
+- **`jup pull`** takes paths inside the project and replaces local files that differ; `--dry-run` lists first.
+- **`jup submit`** prices the copy of the script that is on the cluster and refuses when it asks for something
+  else than the copy here.
+- **Exit codes** of `jup` itself are 64 and up (65 settings, 66 no connection, 68 a failure on the cluster), and
+  its messages start with `jup:`; `jup ssh` hands through the remote command's own code.
+
+To use `jup` in your own terminal, add a shell alias to the copy in a clone
+(`alias jup=~/src/hpc-tools/plugins/jupiter/bin/jup`). Do not link it into a directory on your PATH: Claude Code
+would then run that copy for the skills and the plugin's own for the hooks. `jup doctor` warns when another `jup`
+comes first.
+
+## Settings
+
+Per person in `~/.config/hpc-tools/jupiter.json`, per repository in `.jupiter.json` at its root (worth
+committing), and for one command as `JUP_<NAME>` in the environment. `jup config` prints the values in effect and
+where each came from. Values are checked: names and paths may hold only plain characters.
+
+| Setting | Default | Meaning | In a repository's file? |
+|---|---|---|---|
+| `host` | `hpc-jupiter` | the alias in `~/.ssh/config` | no, each person's own |
+| `account` | none | the compute project, for `sbatch --account` and the remote directory | yes |
+| `partition` | `booster` | added to a submission that names none | yes |
+| `remote_dir` | `/e/project1/{account}/{user}/{project}` | where the project is copied; `{project}` is the directory's name here, so a clone or worktree under another name goes elsewhere unless the path is written out | yes |
+| `sync_exclude` | none | directories (`notes/`) and globs (`*.ipynb`) that `jup push` leaves out | yes |
+| `ask_above_nodes` | `1` | the cost check asks before a command that reserves more nodes | only to lower it |
+| `ask_above_core_hours` | `300` | or more core-hours at most | only to lower it |
+| `cores_per_node` | `288` | what one node-hour is billed | no |
+| `default_time`, `max_time` | `01:00:00`, `12:00:00` | what the partition gives a job without a time limit, and at most | no |
+
+A repository you clone can therefore not point `jup` at another host, raise the limits of the cost check or
+change what it prices with.
+
+## Permissions and the cost check
+
+A plugin cannot grant itself permissions, so Claude Code asks before each `jup` command. Rules for the commands
+that only read, for your own `~/.claude/settings.json` or a repository's `.claude/settings.json`:
+
+```json
+{
+  "permissions": {
+    "allow": [
+      "Bash(jup doctor)",
+      "Bash(jup config)",
+      "Bash(jup cost *)",
+      "Bash(jup jobs*)",
+      "Bash(jup wait *)",
+      "Bash(jup logs *)",
+      "Bash(jup budget)",
+      "Bash(jup push --dry-run)",
+      "Bash(jup submit --dry-run *)"
+    ]
+  }
+}
+```
+
+Do not allow `Bash(jup *)`: `jup ssh` runs any command on the cluster as you, and `jup submit`, `push`, `pull`,
+`cancel` and `config set` spend the budget or change files.
+
+The cost check reads every Bash command before it runs. For `jup submit`, and for `sbatch`, `salloc` and `srun`
+inside `jup ssh` or `ssh` to JUPITER, it works out nodes x time x 288 from the options and the script's `#SBATCH`
+lines, and makes Claude Code ask you when
+
+- the command reserves more than `ask_above_nodes` nodes or `ask_above_core_hours` core-hours, added up over
+  everything it submits;
+- the cost cannot be read for certain: no `--nodes` or `--time`, a script that is not on your machine, a loop, a
+  shell variable, a `SBATCH_*` variable, a script on standard input, a command it cannot parse;
+- the command changes one of the check's own settings, or a job's limits with `scontrol update`.
+
+It is a second look, not a lock. It sees the command Claude is about to run and nothing behind it: a script on
+the cluster that itself calls `sbatch`, or a file edited by other means, passes unseen. If the check cannot run
+at all, it asks. The question is denied automatically in non-interactive runs (`claude -p`).
+
+## Removing it
+
+Uninstalling the plugin leaves what setup made outside it: `~/.config/hpc-tools/jupiter.json`, a repository's
+`.jupiter.json`, the permission rules you added, the `Host` entry in `~/.ssh/config`, and the copies on the cluster.
+
+## Where the facts come from
+
+The reference files in `skills/cluster/references/` were written from JSC's JUPITER documentation as read on
+2026-11-12 and from jobs run on the system in November 2026; each file names its sources. JUPITER is in an
+early-access phase and its documentation changes: when a fact there is wrong, fix the reference file.
