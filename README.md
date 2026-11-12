@@ -18,8 +18,13 @@ In Claude Code:
 
 ```text
 /plugin marketplace add nuinashco/hpc-tools
+```
+
+```text
 /plugin install jupiter@hpc-tools
 ```
+
+Enter them one at a time: pasted together they are read as one command.
 
 Then ask Claude to set you up ("set up JUPITER for this repo"), or run the plugin's setup skill
 (`/jupiter:setup`). The plugin's own page says what it adds and how to configure it.

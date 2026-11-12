@@ -11,8 +11,13 @@ works through one connection that you open, and it prices a job before submittin
 
 ```text
 /plugin marketplace add nuinashco/hpc-tools
+```
+
+```text
 /plugin install jupiter@hpc-tools
 ```
+
+Enter them one at a time: pasted together they are read as one command.
 
 Then `/jupiter:setup`, or ask Claude to set up JUPITER for the repository you are in.
 
