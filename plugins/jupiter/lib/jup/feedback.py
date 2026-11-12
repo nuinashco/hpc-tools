@@ -28,11 +28,15 @@ from jup.errors import RemoteError, UserError
 PLUGIN = "jupiter"
 # GitHub takes 65,536 characters in an issue's text; the report stays under that.
 MAX_REPORT = 60_000
+# A digest is what gets published, so the user reads all of it first.
+MAX_DIGEST = 8_000
 # The most of one command's output and of one message that a report quotes.
 _MAX_OUTPUT = 3_000
 _MAX_MESSAGE = 2_000
 # The most records of the helper's log that a report lists, and the most of one turn.
-_MAX_LOG = 150
+# Of a command in the log: one the cost check let pass, and one it asked about.
+_MAX_PASSED = 160
+_MAX_ASKED = 800
 _MAX_TURN = 10_000
 # Commands that have to do with the cluster, wherever they stand in a command line.
 _COMMANDS = re.compile(
@@ -358,23 +362,42 @@ def split_turns(
     return [turn for turn in turns if turn.prompt or turn.entries], facts
 
 
-def render_log(records: Sequence[Mapping[str, Any]]) -> str:
-    """Return the helper's log records as lines."""
-    lines = []
-    for record in records[-_MAX_LOG:]:
+def render_log(records: Sequence[Mapping[str, Any]], limit: int = _MAX_TURN) -> str:
+    """Return the helper's log records as lines of at most `limit` characters in all.
+
+    What the cost check asked about and what failed is what feedback is about, so
+    those stay; of the runs that worked and the checks that passed, the latest do.
+    """
+    entries: list[tuple[bool, str]] = []
+    for record in records:
         at = str(record.get("ts", ""))[11:19]
         if record.get("kind") == "run":
             words = " ".join(str(word) for word in record.get("args") or [])
             error = f": {record['error']}" if record.get("error") else ""
-            lines.append(
+            line = (
                 f"{at} jup {record.get('name')} {words} -> exit {record.get('exit')} "
                 f"in {record.get('seconds')} s{error}"
             )
+            entries.append((bool(record.get("exit")), line))
         elif record.get("kind") == "check":
             asked = record.get("decision") == "ask"
             reason = f": {record.get('reason')}" if asked else ""
             verdict = "asked the user" if asked else "passed"
-            lines.append(f"{at} cost check {verdict}{reason} | {record.get('command')}")
+            # On one line, so that a command of many lines stays one record.
+            command = " ".join(str(record.get("command", "")).split())
+            command = clip(command, _MAX_ASKED if asked else _MAX_PASSED)
+            entries.append((asked, f"{at} cost check {verdict}{reason} | {command}"))
+    size = sum(len(line) + 1 for _, line in entries)
+    lines: list[str] = []
+    dropped = 0
+    for matters, line in entries:
+        if size > limit and not matters:
+            size -= len(line) + 1
+            dropped += 1
+        else:
+            lines.append(line)
+    if dropped:
+        lines.insert(0, f"({dropped} earlier records of what worked are left out)")
     return "\n".join(lines) if lines else "no records"
 
 
@@ -468,6 +491,67 @@ def build(
         turns_total=len(turns),
         redacted=redact.summary(),
         characters=len(text),
+    )
+
+
+def find_digest(report: Path) -> Path:
+    """Return where the digest of a report is kept."""
+    return report.with_name(f"{report.stem}.digest.md")
+
+
+def write_digest(report: Path, text: str, redact: Redactor) -> Path:
+    """Write a digest of a report beside it, with names and secrets taken out again.
+
+    Whoever wrote it saw only the report, yet it reached here through a session
+    that knows more.
+    """
+    cleaned = redact(text.strip())
+    if not cleaned:
+        raise UserError("the digest is empty; pass its text on standard input")
+    if len(cleaned) > MAX_DIGEST:
+        raise UserError(
+            f"the digest holds {len(cleaned):,} characters and may hold "
+            f"{MAX_DIGEST:,}, since the user reads all of it; shorten it"
+        )
+    # An issue takes its title from the first line.
+    if not cleaned.startswith("# "):
+        cleaned = f"# {PLUGIN} feedback\n\n{cleaned}"
+    path = find_digest(report)
+    path.write_text(cleaned + "\n")
+    return path
+
+
+def read_visibility(
+    repository: str,
+    run: Callable[..., subprocess.CompletedProcess[str]] = subprocess.run,
+) -> str:
+    """Return `public`, `private` or `internal` for a repository; nothing if unknown."""
+    command = ["gh", "repo", "view", repository, "--json", "visibility"]
+    try:
+        done = run(
+            [*command, "--jq", ".visibility"],
+            capture_output=True,
+            text=True,
+            errors="replace",
+        )
+    except OSError:
+        return ""
+    word = (done.stdout or "").strip().lower() if done.returncode == 0 else ""
+    return word if word in ("public", "private", "internal") else ""
+
+
+def describe_readers(repository: str, visibility: str) -> str:
+    """Return who can read an issue filed on a repository, in words."""
+    if visibility == "public":
+        return (
+            f"{repository} is public: anyone can read an issue there, and one that "
+            "was filed cannot be taken back for certain"
+        )
+    if visibility:
+        return f"{repository} is {visibility}: its members can read an issue there"
+    return (
+        f"gh could not tell whether {repository} is public; take an issue there to "
+        "be readable by anyone"
     )
 
 

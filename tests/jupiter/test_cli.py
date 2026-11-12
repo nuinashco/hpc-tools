@@ -8,7 +8,7 @@ import shlex
 
 import pytest
 
-from jup import cli, journal
+from jup import cli, feedback, journal
 from jup.errors import NoConnectionError, RemoteError, UserError
 from jup.ssh import MARK
 
@@ -465,15 +465,81 @@ def test_the_log_can_be_switched_off(monkeypatch, settings_home, capsys):
     assert journal.read() == []
 
 
-def test_the_budget_comes_with_how_its_core_hours_convert(context, run, capsys):
+JUTIL = """system=jupiter
+cont-partition=JUPITER_BOOSTER
+budget-account=proj
+acct-period-start=2026-11-01
+acct-period-end=2027-02-28
+coreh-quota-total=360000
+coreh-avail=351198.4
+coreh-avail-percent=97.6
+coreh-consumed-total=8801.6
+coreh-consumed-curr-month=8801.6
+"""
+
+
+def test_the_budget_is_told_in_node_hours_and_gpu_hours(context, run, capsys):
+    run.reply("jutil project cpuquota -p proj", out=JUTIL)
+
+    assert cli.run_budget([], context) == 0
+
+    printed = capsys.readouterr().out
+    assert (
+        "proj, 2026-11-01 to 2027-02-28: 1,250 node-hours (5,000 GPU-hours)" in printed
+    )
+    assert "used: 30.6 node-hours (122 GPU-hours)" in printed
+    assert "left: 1,219 node-hours (4,878 GPU-hours), 97.6% of it" in printed
+    assert "coreh-avail" not in printed
+
+
+def test_a_budget_in_a_form_not_known_is_shown_as_it_came(context, run, capsys):
+    run.reply("jutil", out="quota 360000 core-h\n")
+
     cli.run_budget([], context)
 
-    assert run.ran("jutil project cpuquota -p proj")
-    assert "a node-hour is 288 of them and a GPU-hour 72" in capsys.readouterr().out
+    printed = capsys.readouterr().out
+    assert "quota 360000 core-h" in printed
+    assert "a node-hour is 288 of them and a GPU-hour 72" in printed
+
+
+def test_the_budgets_own_output_can_be_asked_for(context, run, capsys):
+    run.reply("jutil", out=JUTIL)
+
+    cli.run_budget(["--raw"], context)
+
+    assert "coreh-avail=351198.4" in capsys.readouterr().out
 
 
 def test_a_budget_that_could_not_be_read_gets_no_note(context, run, capsys):
-    run.reply("jutil", code=1)
+    run.reply("jutil", code=1, err="jutil: no such project\n")
 
     assert cli.run_budget([], context) == 1
-    assert capsys.readouterr().out == ""
+    captured = capsys.readouterr()
+    assert captured.out == "" and "no such project" in captured.err
+
+
+def test_a_digest_goes_beside_its_report_with_who_can_read_it(
+    context, run, tmp_path, monkeypatch, capsys
+):
+    cli.run_feedback(["n", "--transcript", str(write_session(tmp_path))], context)
+    [report] = (journal.state_dir() / "feedback").iterdir()
+    run.reply("gh repo view", out="PUBLIC\n")
+    monkeypatch.setattr("sys.stdin", io.StringIO("# jupiter feedback: n\n\nbody\n"))
+
+    assert cli.run_feedback(["--digest", str(report)], context) == 0
+
+    printed = capsys.readouterr().out
+    digest = feedback.find_digest(report)
+    assert digest.read_text() == "# jupiter feedback: n\n\nbody\n"
+    assert "is public: anyone can read" in printed and f"--send {digest}" in printed
+
+
+def test_discarding_a_report_deletes_its_digest_too(context, tmp_path, monkeypatch):
+    cli.run_feedback(["n", "--transcript", str(write_session(tmp_path))], context)
+    [report] = (journal.state_dir() / "feedback").iterdir()
+    monkeypatch.setattr("sys.stdin", io.StringIO("body"))
+    cli.run_feedback(["--digest", str(report)], context)
+
+    cli.run_feedback(["--discard", str(report)], context)
+
+    assert list((journal.state_dir() / "feedback").iterdir()) == []

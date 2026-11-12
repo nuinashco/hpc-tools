@@ -99,8 +99,8 @@ jup ssh 'sacct -j JOB -X -o JobID,JobName%30,NNodes,Elapsed,State'
 ```
 
 Node-hours = nodes x elapsed hours, and GPU-hours four times that. Report both with
-every result, and for failed and cancelled jobs too. `jup budget` shows the project's
-total in core-hours (288 a node-hour), but only up to last midnight.
+every result, and for failed and cancelled jobs too. `jup budget` shows what the
+project has used and has left, but only up to last midnight.
 
 ## Bringing results back
 

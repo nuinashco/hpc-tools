@@ -32,7 +32,7 @@ import subprocess
 import sys
 import time
 from collections import Counter
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -584,15 +584,66 @@ def describe_budget_unit(config: Config) -> str:
     return f"{text}; divide its numbers to compare them with `jup cost`"
 
 
+def read_budgets(text: str) -> list[dict[str, str]]:
+    """Return the budgets in jutil's `name=value` lines, one for each `system=`."""
+    budgets: list[dict[str, str]] = []
+    for line in text.splitlines():
+        name, found, value = line.strip().partition("=")
+        if not found:
+            continue
+        if name == "system" or not budgets:
+            budgets.append({})
+        budgets[-1][name] = value
+    return [budget for budget in budgets if "coreh-quota-total" in budget]
+
+
+def describe_budget(budget: Mapping[str, str], config: Config) -> str:
+    """Return one budget of jutil's in node-hours and GPU-hours."""
+
+    def hours(name: str) -> str:
+        try:
+            cores = float(budget.get(name, ""))
+        except ValueError:
+            return "an amount jutil did not give"
+        return slurm.describe_cost(cores / config.cores_per_node, config.gpus_per_node)
+
+    name = budget.get("budget-account", "the account")
+    start = budget.get("acct-period-start", "?")
+    period = f"{start} to {budget.get('acct-period-end', '?')}"
+    share = budget.get("coreh-avail-percent")
+    left = f", {share}% of it" if share else ""
+    return (
+        f"{name}, {period}: {hours('coreh-quota-total')}\n"
+        f"  used: {hours('coreh-consumed-total')}, of which this month "
+        f"{hours('coreh-consumed-curr-month')}\n"
+        f"  left: {hours('coreh-avail')}{left}"
+    )
+
+
 def run_budget(arguments: Sequence[str], context: Context) -> int:
-    argparse.ArgumentParser(prog="jup budget").parse_args(arguments)
+    parser = argparse.ArgumentParser(prog="jup budget")
+    parser.add_argument("--raw", action="store_true", help="jutil's own output")
+    options = parser.parse_args(arguments)
     config = context.config
     account = shlex.quote(config.need_account())
-    script = f"jutil project cpuquota -p {account}"
-    code = context.remote.execute(script, capture=False).returncode
-    if code == 0:
+    done = context.remote.execute(f"jutil project cpuquota -p {account}")
+    if done.returncode:
+        print(done.stdout, end="")
+        print(done.stderr, end="", file=sys.stderr)
+        return done.returncode
+    budgets = [] if options.raw else read_budgets(done.stdout)
+    if not budgets:
+        # A form of jutil's output this code does not know is shown as it came.
+        print(done.stdout, end="")
         print(describe_budget_unit(config))
-    return code
+        return 0
+    for budget in budgets:
+        print(describe_budget(budget, config))
+    print(
+        "as of last midnight: jutil counts once a night, and in core-hours "
+        f"({config.cores_per_node:,} a node-hour); --raw shows its own output"
+    )
+    return 0
 
 
 def read_version() -> str:
@@ -613,13 +664,45 @@ def run_feedback(arguments: Sequence[str], context: Context) -> int:
     parser.add_argument(
         "--whole", action="store_true", help="every turn of the session"
     )
-    parser.add_argument("--send", type=Path, metavar="FILE", help="file a report")
-    parser.add_argument("--discard", type=Path, metavar="FILE", help="delete a report")
+    parser.add_argument(
+        "--digest",
+        type=Path,
+        metavar="REPORT",
+        help="write a report's digest, read from standard input",
+    )
+    parser.add_argument(
+        "--send", type=Path, metavar="FILE", help="file a digest or a report"
+    )
+    parser.add_argument(
+        "--discard", type=Path, metavar="FILE", help="delete a report and its digest"
+    )
     options = parser.parse_args(arguments)
     config = context.config
     if options.discard:
-        feedback.check_report(options.discard).unlink()
+        report = feedback.check_report(options.discard)
+        report.unlink()
+        feedback.find_digest(report).unlink(missing_ok=True)
         print(f"deleted {options.discard}; nothing was sent")
+        return 0
+    readers = feedback.describe_readers(
+        config.feedback_repo,
+        feedback.read_visibility(config.feedback_repo, context.remote.run),
+    )
+    if options.digest:
+        report = feedback.check_report(options.digest)
+        redact = feedback.Redactor.for_user(
+            login=context.remote.user() if context.remote.has_entry() else "",
+            account=config.account,
+        )
+        digest = feedback.write_digest(report, sys.stdin.read(), redact)
+        print(f"digest: {digest} ({len(digest.read_text()):,} characters)")
+        print(f"taken out of it: {redact.summary()}")
+        print(readers)
+        print(
+            "nothing has been sent; after the user has read the digest and agreed, "
+            f"`jup feedback --send {digest}` files it as an issue; the report it "
+            "was made from stays here"
+        )
         return 0
     if options.send:
         report = feedback.check_report(options.send)
@@ -664,9 +747,11 @@ def run_feedback(arguments: Sequence[str], context: Context) -> int:
         f"used the plugin (the session has {built.turns_total}), and the helper's log"
     )
     print(f"taken out: {built.redacted}")
+    print(readers)
     print(
-        "nothing has been sent; after the user has read it and agreed, `jup feedback "
-        f"--send {built.path}` files it as an issue on {config.feedback_repo}"
+        "nothing has been sent; `jup feedback --digest "
+        f"{built.path}` takes a digest of it on standard input, and `--send FILE` "
+        "files a digest or a report as an issue once the user has read it and agreed"
     )
     return 0
 
