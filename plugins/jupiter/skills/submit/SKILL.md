@@ -106,9 +106,13 @@ every run of it, so pass `--job-name=` with each submission, built from what you
 of the experiment:
 
 ```
-PROJECT-METHOD-VARIANT        swe-grpo-sync    swe-grpo-async    swe-agent6-val
+PROJECT-METHOD-VARIANT     in a repository `codeagent-rl`:
+                           codeagent-rl-ppo-clip01    codeagent-rl-ppo-clip02
+                           codeagent-rl-agent6-val    codeagent-rl-agent6-val-test
 ```
 
+- PROJECT is the repository's name, whole and unshortened: it tells the user's
+  projects apart in one queue.
 - METHOD is what is being tried, in the user's own word for it: the algorithm, the
   version of the model or agent, the benchmark. Take it from the conversation and
   from the config, never from the script's file name: `train`, `run` or `job` tells

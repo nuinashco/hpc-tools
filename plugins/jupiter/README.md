@@ -77,10 +77,10 @@ It needs Python 3.9 or later (the one that comes with Apple's command line tools
   is the one of `jup push --dry-run` (size and time of each file, a few seconds); a directory on the cluster that
   no push made is not compared.
 - **Job names.** The submit skill has Claude name each run for what it is about, `PROJECT-METHOD-VARIANT`
-  (`swe-grpo-sync`), passed with `--job-name=` at every submission, since a script's own name is the same for
-  every run of it. `jup submit` prints the name the job carries, and a note when a run with arguments keeps the
-  script's name. `jup jobs` shows beside each name the script and arguments the job was submitted with (`RUNS`,
-  from accounting's record of the submitted line).
+  (`codeagent-rl-ppo-clip01` in a repository `codeagent-rl`), passed with `--job-name=` at every submission,
+  since a script's own name is the same for every run of it. `jup submit` prints the name the job carries, and
+  a note when a run with arguments keeps the script's name. `jup jobs` shows beside each name the script and
+  arguments the job was submitted with (`RUNS`, from accounting's record of the submitted line).
 - **Exit codes** of `jup` itself are 64 and up (65 settings, 66 no connection, 68 a failure on the cluster,
   69 from `jup wait` for a job whose GPUs sit idle), and
   its messages start with `jup:`; `jup ssh` hands through the remote command's own code.
