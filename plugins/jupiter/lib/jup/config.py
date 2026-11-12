@@ -35,6 +35,10 @@ DEFAULTS: dict[str, Any] = {
     "max_time": "12:00:00",
     "ask_above_nodes": 1,
     "ask_above_node_hours": 1,
+    # `jup wait` reads a job's GPUs once it has run this long (loading weights takes
+    # minutes), and reports GPUs that stayed idle for this many minutes.
+    "gpu_warmup": "00:10:00",
+    "gpu_idle_minutes": 5,
     # Whether the helper keeps its local log of runs, which `jup feedback` reads.
     "log": True,
     # Where `jup feedback --send` files its report: this plugin's own repository.
@@ -47,6 +51,8 @@ PERSONAL = frozenset(
         "host",
         "cores_per_node",
         "gpus_per_node",
+        "gpu_warmup",
+        "gpu_idle_minutes",
         "default_time",
         "max_time",
         "log",
@@ -56,8 +62,8 @@ PERSONAL = frozenset(
 # Limits of the cost check: a repository's file may lower them, never raise them.
 LIMITS = frozenset({"ask_above_nodes", "ask_above_node_hours"})
 _LISTS = frozenset({"sync_exclude"})
-_NUMBERS = frozenset({"cores_per_node", "gpus_per_node", *LIMITS})
-_TIMES = frozenset({"default_time", "max_time"})
+_NUMBERS = frozenset({"cores_per_node", "gpus_per_node", "gpu_idle_minutes", *LIMITS})
+_TIMES = frozenset({"default_time", "max_time", "gpu_warmup"})
 _SWITCHES = frozenset({"log"})
 _YES = frozenset({"true", "yes", "on", "1"})
 _NO = frozenset({"false", "no", "off", "0"})
@@ -200,6 +206,8 @@ class Config:
     max_time: str
     ask_above_nodes: float
     ask_above_node_hours: float
+    gpu_warmup: str
+    gpu_idle_minutes: float
     log: bool
     feedback_repo: str
     # Where `push` copies from and what {project} names.
@@ -241,6 +249,8 @@ class Config:
             max_time=values["max_time"],
             ask_above_nodes=values["ask_above_nodes"],
             ask_above_node_hours=values["ask_above_node_hours"],
+            gpu_warmup=values["gpu_warmup"],
+            gpu_idle_minutes=values["gpu_idle_minutes"],
             log=values["log"],
             feedback_repo=values["feedback_repo"],
             root=root,

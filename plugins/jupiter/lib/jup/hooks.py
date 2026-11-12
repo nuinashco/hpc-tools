@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import json
 import socket
 from collections.abc import Callable, Mapping, Sequence
@@ -9,7 +10,7 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
-from jup import journal, slurm
+from jup import gpus, journal, slurm
 from jup.config import Config, find_project_file
 from jup.errors import UserError
 from jup.ssh import Remote
@@ -51,16 +52,35 @@ def estimate(
         return None
     directives: dict[str, str] = {}
     doubts: list[str] = []
+    text, inside = "", ""
     if kind == "sbatch" and rest and "wrap" not in options:
         script = slurm.find_script(arguments, (cwd, config.root))
         if script is None:
             doubts.append(f"its script {rest[0]} is not here to read its #SBATCH lines")
         else:
-            directives = slurm.read_directives(script.read_text(errors="replace"))
+            text = script.read_text(errors="replace")
+            directives = slurm.read_directives(text)
+            with contextlib.suppress(ValueError):
+                inside = str(script.resolve().relative_to(config.root.resolve()))
     request = slurm.Request.of(
         options, directives, default_time=config.default_time, max_time=config.max_time
     )
-    return replace(request, doubts=(*request.doubts, *doubts))
+    flags = slurm.find_gpu_flags(
+        {**directives, **options}, text, request.nodes, config.gpus_per_node
+    )
+    return replace(
+        request,
+        doubts=(*request.doubts, *doubts),
+        flags=tuple(flags),
+        script=inside,
+    )
+
+
+def describe_load(script: str, config: Config) -> str:
+    """Return what the last measured job of a project's script did with its GPUs."""
+    name = gpus.name_script(config.root, script)
+    digest = gpus.read_digest(config.root / script)
+    return gpus.describe_last(gpus.recall(name), digest)
 
 
 def ask(reason: str) -> dict[str, Any]:
@@ -92,6 +112,7 @@ def guard_submission(
         )
     here = is_cluster_node() if on_cluster is None else on_cluster
     lines: list[str] = []
+    scripts: list[str] = []
     unsure = False
     hours = 0.0
     nodes = 0
@@ -126,16 +147,24 @@ def guard_submission(
                 continue
             if request is None:
                 continue
-            unsure = unsure or bool(request.doubts or submission.doubts)
+            unsure = unsure or bool(
+                request.doubts or submission.doubts or request.flags
+            )
             hours += request.node_hours()
             nodes += request.nodes * request.tasks
             lines.append(request.describe(config.gpus_per_node, submission.doubts))
+            if request.script and config.gpus_per_node:
+                scripts.append(request.script)
     over = hours > config.ask_above_node_hours or nodes > config.ask_above_nodes
     if not lines or not (unsure or over):
         return None
     cost = slurm.describe_cost(hours, config.gpus_per_node)
     total = f" In all at most {cost}." if len(lines) > 1 else ""
-    return ask(f"This submits to JUPITER: {'; '.join(lines)}.{total} {_SHARED}")
+    loads = "".join(
+        f" About {script}: {describe_load(script, config)}."
+        for script in dict.fromkeys(scripts)
+    )
+    return ask(f"This submits to JUPITER: {'; '.join(lines)}.{total}{loads} {_SHARED}")
 
 
 def note(text: str) -> dict[str, Any]:

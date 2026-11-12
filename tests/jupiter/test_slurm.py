@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 import pytest
 
 from jup import slurm
@@ -133,7 +135,6 @@ def test_a_large_cost_is_told_in_whole_hours():
 @pytest.mark.parametrize(
     ("options", "doubt"),
     [
-        ({"time": "10"}, "no --nodes, one assumed"),
         ({"time": "10", "ntasks": "2000"}, "--ntasks decides how many"),
         ({"nodes": "1"}, "no --time, the default 1:00:00 assumed"),
         ({"nodes": "1", "time": "UNLIMITED"}, "asks for no limit, 12:00:00 assumed"),
@@ -313,3 +314,71 @@ def test_a_pipe_is_told_from_what_ends_a_command():
         (["e"], True),
         (["f"], False),
     ]
+
+
+def test_one_task_without_nodes_named_is_one_node_for_certain():
+    asked = request({"time": "10"})
+
+    assert (asked.nodes, asked.doubts) == (1, ())
+
+
+@pytest.mark.parametrize(
+    ("arguments", "unknown"),
+    [
+        (["-N", "$N", "job.sh"], True),
+        (["--time=$LIMIT", "job.sh"], True),
+        (["$SCRIPT"], True),
+        (["job.sh", "$ARGUMENT"], False),
+        (["--wrap", "echo ${HOME-none}; srun -n1 hostname"], False),
+        (["-t", "5", "--wrap=echo $HOME"], False),
+    ],
+)
+def test_a_variable_counts_only_where_it_can_change_the_request(arguments, unknown):
+    assert slurm.holds_unknown(arguments, "sbatch") is unknown
+
+
+@pytest.mark.parametrize(
+    ("options", "script", "flag"),
+    [
+        ({"gres": "gpu:1"}, "", "asks for 1 of a node's 4 GPUs"),
+        ({"gres": "mem:2,gpu:a100:2"}, "", "asks for 2 of a node's 4 GPUs"),
+        ({"gpus-per-node": "3"}, "", "asks for 3 of a node's 4 GPUs"),
+        ({"gpus": "4", "nodes": "2"}, "", "asks for 2 of a node's 4 GPUs"),
+        ({}, "export CUDA_VISIBLE_DEVICES=0\npython a.py", "shows its programs 1 of"),
+        ({}, 'CUDA_VISIBLE_DEVICES="0,1" python a.py', "shows its programs 2 of"),
+    ],
+)
+def test_a_request_that_leaves_gpus_unused_is_flagged(options, script, flag):
+    nodes = int(options.get("nodes", "1"))
+
+    [found] = slurm.find_gpu_flags(options, script, nodes, 4)
+
+    assert flag in found
+
+
+@pytest.mark.parametrize(
+    ("options", "script"),
+    [
+        ({}, "python a.py"),
+        ({"gres": "gpu:4"}, ""),
+        ({"gpus": "8", "nodes": "2"}, ""),
+        ({}, "CUDA_VISIBLE_DEVICES=0 a &\nCUDA_VISIBLE_DEVICES=1,2,3 b &\nwait"),
+        ({}, "for gpu in 0 1 2 3; do CUDA_VISIBLE_DEVICES=$gpu serve & done"),
+        ({}, "CUDA_VISIBLE_DEVICES=0 a &\nCUDA_VISIBLE_DEVICES=$others b &\nwait"),
+        ({}, "# export CUDA_VISIBLE_DEVICES=0\npython a.py"),
+    ],
+)
+def test_a_request_that_may_use_every_gpu_is_not_flagged(options, script):
+    nodes = int(options.get("nodes", "1"))
+
+    assert slurm.find_gpu_flags(options, script, nodes, 4) == []
+
+
+def test_nodes_without_gpus_are_never_flagged():
+    assert slurm.find_gpu_flags({"gres": "gpu:1"}, "", 1, 0) == []
+
+
+def test_a_flag_follows_the_cost_and_its_doubts():
+    asked = replace(request({"nodes": "1"}), flags=("it asks for 1 of 4",))
+
+    assert asked.describe(4).endswith("assumed); it asks for 1 of 4")

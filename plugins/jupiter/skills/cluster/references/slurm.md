@@ -56,8 +56,12 @@ affinity, accounting, known-issues, faq), read 2026-11-12, and jobs run in Novem
 
 ## GPUs and cores inside a job
 
-- **One task sees one GPU.** A job that starts a single process and wants all four
-  sets `export CUDA_VISIBLE_DEVICES=0,1,2,3` itself.
+- **A step sees every GPU it was given.** The batch script and a single `srun` task
+  both get `CUDA_VISIBLE_DEVICES=0,1,2,3`, and with `--gpus-per-task=1` each of four
+  tasks gets its own (measured in job 2851729, 2026-11-12; JSC's page says a single
+  task sees one). Seeing four is not using four: a program written for one GPU loads
+  one, and the node is billed with all of them. `jup gpus JOB` shows what a running
+  job does with each.
 - **Give `--cpus-per-task` on the `srun` line itself.** JSC's page says `srun` does not
   take it from `sbatch` (written for Slurm 23.02; upstream changed that again later,
   and JUPITER runs 25.05). Repeating the option is right either way.

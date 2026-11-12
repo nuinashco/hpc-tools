@@ -70,6 +70,12 @@ def state_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     return home
 
 
+@pytest.fixture(autouse=True)
+def terminal(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Run every test as at a terminal, also when Claude Code starts the tests."""
+    monkeypatch.delenv("CLAUDECODE", raising=False)
+
+
 @pytest.fixture
 def settings_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     """Point the user's settings at an empty directory, and return it."""

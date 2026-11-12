@@ -24,8 +24,14 @@ the test.
 Start from `${CLAUDE_SKILL_DIR}/templates/job.sbatch` (copy it into the project)
 unless the project has its own. What a script for JUPITER needs:
 
-- `--nodes` and `--time` written out. Without them the cost check cannot price the
-  job and asks the user every time.
+- `--nodes` and `--time` written out. Without `--time` the cost check cannot price
+  the job and asks the user every time.
+- Work for every GPU. A node is billed with all four, and the script sees all four;
+  a program written for one GPU still loads one. Be able to say what each GPU will
+  do (one process a GPU, a launcher that spreads the work, four tasks under `srun`),
+  and say it to the user before submitting. Asking for fewer (`--gres=gpu:1`) or
+  showing the programs fewer (`CUDA_VISIBLE_DEVICES=0`) saves nothing and makes the
+  cost check ask.
 - `--output` into a directory. `jup submit` creates it; plain `sbatch` does not, and
   the job then dies with nothing to read.
 - No `--account` unless the script is tied to one project: `jup submit` adds the
@@ -115,6 +121,12 @@ jup wait JOB --until-running    # in the background: ends when the job starts
 jup logs JOB                    # then: did it get past its first minute?
 jup wait JOB                    # in the background again: ends with the job, exit 0 only if COMPLETED
 ```
+
+`jup wait` also ends, with exit code 69, when GPUs of the job sit idle after its
+warm-up: ask the user then whether to cancel the job or keep it, the way the `jobs`
+skill describes, and decide nothing yourself. `jup submit` and the cost check's
+question say what the script's last measured job did with its GPUs; when none was
+measured, the test of step 6 is where to find out, if it runs past the warm-up.
 
 Most failures show in the first lines of output, and a job that is wrong should be
 cancelled then, not found dead an hour later. Tell the user the job number and when it

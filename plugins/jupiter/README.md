@@ -49,8 +49,9 @@ jup cost SBATCH_ARGS...         what a submission would reserve and cost
 jup submit [--dry-run] SBATCH_ARGS...
 jup jobs [--days N]             queued, running and recent jobs
 jup wait JOB [--until-running]  print each state change until the job ends
+jup gpus JOB                    a running job's GPUs now: load and memory
 jup logs JOB [-n LINES]         the end of a job's output
-jup cancel JOB...
+jup cancel JOB...               stop jobs; says which had already ended
 jup budget [--raw]              the account's budget in node-hours and GPU-hours: granted, used, left
 jup feedback NOTE... | --digest REPORT | --send FILE | --discard FILE
 ```
@@ -72,7 +73,8 @@ It needs Python 3.9 or later (the one that comes with Apple's command line tools
 - **`jup pull`** takes paths inside the project and replaces local files that differ; `--dry-run` lists first.
 - **`jup submit`** prices the copy of the script that is on the cluster and refuses when it asks for something
   else than the copy here.
-- **Exit codes** of `jup` itself are 64 and up (65 settings, 66 no connection, 68 a failure on the cluster), and
+- **Exit codes** of `jup` itself are 64 and up (65 settings, 66 no connection, 68 a failure on the cluster,
+  69 from `jup wait` for a job whose GPUs sit idle), and
   its messages start with `jup:`; `jup ssh` hands through the remote command's own code.
 
 To use `jup` in your own terminal, add a shell alias to the copy in a clone
@@ -95,6 +97,7 @@ where each came from. Values are checked: names and paths may hold only plain ch
 | `sync_exclude` | none | directories (`notes/`) and globs (`*.ipynb`) that `jup push` leaves out | yes |
 | `ask_above_nodes` | `1` | the cost check asks before a command that reserves more nodes | only to lower it |
 | `ask_above_node_hours` | `1` | or more node-hours at most | only to lower it |
+| `gpu_warmup`, `gpu_idle_minutes` | `00:10:00`, `5` | how long a job runs before `jup wait` reads its GPUs, and how long one must stay idle to be reported | no |
 | `gpus_per_node` | `4` | the GPUs that come with a node, for the cost in GPU-hours; `0` leaves that out | no |
 | `cores_per_node` | `288` | the core-hours `jutil` counts for a node-hour | no |
 | `log` | `true` | whether `jup` keeps its local log of runs | no |
@@ -138,6 +141,8 @@ lines, in node-hours and GPU-hours, and makes Claude Code ask you when
   everything it submits;
 - the cost cannot be read for certain: no `--nodes` or `--time`, a script that is not on your machine, a loop, a
   shell variable, a `SBATCH_*` variable, a script on standard input, a command it cannot parse;
+- the request leaves GPUs it pays for unused, whatever its size: fewer GPUs asked for than a node has
+  (`--gres=gpu:1`), or a script that shows its programs fewer (`CUDA_VISIBLE_DEVICES=0`);
 - the command changes one of the check's own settings, or a job's limits with `scontrol update`.
 
 What a command is given to read, in a here-document, a here-string or a pipe, counts by who reads it. For a shell
@@ -149,6 +154,26 @@ names one and goes to a program it does not know.
 It is a second look, not a lock. It sees the command Claude is about to run and nothing behind it: a script on
 the cluster that itself calls `sbatch`, or a file edited by other means, passes unseen. If the check cannot run
 at all, it asks. The question is denied automatically in non-interactive runs (`claude -p`).
+
+## GPUs that are paid for and idle
+
+A node comes with all its GPUs and is billed with them, and no command can tell beforehand whether a job will load
+them. So the plugin measures:
+
+- **`jup wait JOB`** reads each GPU's load once a minute after the job has run for `gpu_warmup` (10 minutes: a
+  model takes minutes to load). When a GPU stayed below 5% for `gpu_idle_minutes` (5) in a row, the command
+  stops with exit code 69 and says which GPUs sit idle, what the job has cost and what it will cost at most.
+  It cancels nothing: Claude asks you, in a question that holds those numbers, whether to cancel the job or
+  keep it, and runs the command for your answer. In your own terminal the report names the two commands,
+  `jup cancel JOB` and `jup wait JOB --idle-ok`.
+  A job that ends within those 15 minutes, as a test does, is not judged.
+- **The result is kept** for each batch script, in `~/.local/state/hpc-tools/jupiter/gpu-load.json`. When the
+  cost check asks about a later submission of that script, its question says what the last measured job did:
+  "loaded 4 of 4 GPUs", "loaded 1 of 4 GPUs", or that none was measured yet. `jup submit` prints the same.
+- **`jup gpus JOB`** shows a running job's GPUs at any moment.
+
+It measures only while `jup wait` runs, one node's reading takes about 3 seconds on the login node, and a GPU
+that is busy with useless work still counts as loaded.
 
 ## Feedback
 
