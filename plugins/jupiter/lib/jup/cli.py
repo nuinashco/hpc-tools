@@ -623,8 +623,10 @@ def report_idle(
         print(f"  {line}", flush=True)
     print(
         f"  it pays for all of them: {so_far} so far, {at_most} if it runs to its "
-        f"limit\n  tell the user: `jup cancel {job}` stops it, `jup wait {job} "
-        "--idle-ok` goes on waiting",
+        "limit\n  the job still runs and nothing was cancelled; what happens next "
+        "is the user's choice:\n"
+        f"    jup cancel {job}            stops the job\n"
+        f"    jup wait {job} --idle-ok    keeps it and goes on waiting",
         flush=True,
     )
 

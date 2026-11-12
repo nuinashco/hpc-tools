@@ -580,7 +580,8 @@ def test_waiting_stops_when_gpus_the_job_pays_for_sit_idle(context, run, capsys)
     assert "job 7: 3 of its 4 GPUs idle in each of the last 5 readings" in printed
     assert "n1: GPU 0 96%, GPU 1 0%, GPU 2 0%, GPU 3 0%" in printed
     assert "0.23 node-hours (0.93 GPU-hours) so far, 12 node-hours" in printed
-    assert "`jup cancel 7` stops it, `jup wait 7 --idle-ok` goes on" in printed
+    assert "nothing was cancelled; what happens next is the user's choice" in printed
+    assert "jup cancel 7 " in printed and "jup wait 7 --idle-ok " in printed
     assert recall_loaded("repo/job.sbatch") == 1
     assert len(run.ran("srun --jobid=7")) == 5
 
