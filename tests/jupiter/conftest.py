@@ -62,6 +62,14 @@ def run() -> FakeRun:
     return FakeRun()
 
 
+@pytest.fixture(autouse=True)
+def state_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """Keep the helper's log and reports of every test out of the user's own."""
+    home = tmp_path / "state"
+    monkeypatch.setenv("XDG_STATE_HOME", str(home))
+    return home
+
+
 @pytest.fixture
 def settings_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     """Point the user's settings at an empty directory, and return it."""

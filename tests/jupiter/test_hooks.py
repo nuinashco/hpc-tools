@@ -6,7 +6,7 @@ import json
 
 import pytest
 
-from jup import hooks
+from jup import hooks, journal
 from jup.config import Config
 from jup.ssh import Remote
 
@@ -198,3 +198,46 @@ def test_settings_that_cannot_be_used_are_said_so_and_not_repeated(project, run)
     text = describe(project, run)
 
     assert "cannot be used" in text
+
+
+def test_the_check_notes_its_decision_and_the_session_that_asked(project):
+    event = {
+        "tool_input": {"command": "jup submit -N 9 -t 9:00:00 job.sbatch"},
+        "cwd": str(project),
+        "session_id": "abc123",
+        "transcript_path": "/home/x/.claude/projects/p/abc123.jsonl",
+    }
+
+    hooks.run("pre-bash", json.dumps(event), project)
+    hooks.run(
+        "pre-bash",
+        json.dumps({**event, "tool_input": {"command": "jup jobs"}}),
+        project,
+    )
+    hooks.run(
+        "pre-bash", json.dumps({**event, "tool_input": {"command": "ls"}}), project
+    )
+
+    asked, passed = journal.read()
+    assert (asked["kind"], asked["decision"], asked["session"]) == (
+        "check",
+        "ask",
+        "abc123",
+    )
+    assert "9 nodes" in asked["reason"] and asked["command"].startswith("jup submit")
+    assert (passed["decision"], passed["command"]) == ("pass", "jup jobs")
+    known = journal.last_session()
+    assert known is not None and known["transcript"].endswith("abc123.jsonl")
+
+
+def test_the_check_writes_no_log_when_the_log_is_off(project, monkeypatch):
+    monkeypatch.setenv("JUP_LOG", "off")
+    event = {
+        "tool_input": {"command": "jup jobs"},
+        "cwd": str(project),
+        "transcript_path": "/t",
+    }
+
+    hooks.run("pre-bash", json.dumps(event), project)
+
+    assert journal.read() == [] and journal.last_session() is None

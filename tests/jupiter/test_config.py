@@ -138,3 +138,32 @@ def test_a_project_file_above_the_repository_is_not_this_projects(
 
     assert loaded.account is None
     assert loaded.root == repository
+
+
+@pytest.mark.parametrize(
+    ("text", "value"), [("false", False), ("Off", False), ("yes", True)]
+)
+def test_the_log_switch_reads_the_usual_words(text, value):
+    assert config.parse("log", text) is value
+
+
+def test_a_switch_is_not_set_to_something_else():
+    with pytest.raises(ConfigError, match="true or false"):
+        config.parse("log", "maybe")
+
+
+@pytest.mark.parametrize("key", ["log", "feedback_repo"])
+def test_a_repository_cannot_say_where_reports_go_or_whether_runs_are_logged(
+    project, key
+):
+    value = False if key == "log" else "someone/elses"
+    (project / ".jupiter.json").write_text(json.dumps({key: value}))
+
+    with pytest.raises(ConfigError, match="each person's own"):
+        Config.load(project)
+
+
+def test_reports_go_to_a_repository_named_as_owner_and_name():
+    assert config.parse("feedback_repo", "team/tools") == "team/tools"
+    with pytest.raises(ConfigError, match="owner/name"):
+        config.parse("feedback_repo", "https://evil.example/x")

@@ -9,7 +9,7 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
-from jup import slurm
+from jup import journal, slurm
 from jup.config import Config, find_project_file
 from jup.errors import UserError
 from jup.ssh import Remote
@@ -199,8 +199,11 @@ def run(name: str, stdin: str, cwd: Path) -> str:
     command = str((event.get("tool_input") or {}).get("command", ""))
     if not any(trigger in command for trigger in _TRIGGERS):
         return ""
+    logging = True
     try:
-        result = guard_submission(event, Config.load(Path(str(event["cwd"]))))
+        config = Config.load(Path(str(event["cwd"])))
+        logging = config.log
+        result = guard_submission(event, config)
     except Exception as error:
         submits = any(word in command for word in (*slurm.SUBMITTERS, "submit"))
         result = (
@@ -211,4 +214,28 @@ def run(name: str, stdin: str, cwd: Path) -> str:
             if submits
             else None
         )
+    if logging:
+        record(event, command, result)
     return json.dumps(result) if result else ""
+
+
+def record(
+    event: Mapping[str, Any], command: str, result: Mapping[str, Any] | None
+) -> None:
+    """Note in the local log what the check decided, and which session asked."""
+    output = (result or {}).get("hookSpecificOutput") or {}
+    journal.append(
+        {
+            "kind": "check",
+            "session": str(event.get("session_id") or ""),
+            "command": journal.clip(command),
+            "decision": "ask" if result else "pass",
+            "reason": journal.clip(str(output.get("permissionDecisionReason", ""))),
+        }
+    )
+    if event.get("transcript_path"):
+        journal.remember_session(
+            str(event.get("session_id") or ""),
+            str(event["transcript_path"]),
+            str(event.get("cwd") or ""),
+        )
