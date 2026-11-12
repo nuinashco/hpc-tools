@@ -9,6 +9,7 @@ plugins/<system>/                  one plugin per HPC system; everything its use
   README.md                        what the plugin adds, its command, settings and permissions
   skills/cluster/                  the system's facts and rules; references/ holds one file per subject
   skills/setup|submit|jobs/        the tasks
+  skills/feedback/                 a report for the maintainers; only the user can start it
   hooks/hooks.json                 before each Bash call: the cost check; at session start: the project note
   bin/<helper>                     launcher; puts lib/ on the path
   lib/<helper>/                    the helper's code
@@ -17,7 +18,7 @@ tools/                             checks for this repository, run by the git ho
 ```
 
 Today there is one plugin, `plugins/jupiter`, with the helper `jup`. Its code is in layers, each importing only
-those after it: `cli` > `hooks`, `sync` > `ssh`, `config` > `slurm` > `errors`.
+those after it: `cli` > `feedback`, `hooks`, `sync` > `ssh`, `config` > `slurm`, `journal` > `errors`.
 
 ## Rules for every plugin
 
@@ -47,8 +48,14 @@ those after it: `cli` > `hooks`, `sync` > `ssh`, `config` > `slurm` > `errors`.
   person, with the words a user would say and the system's name, and says it is not for other clusters. Keep
   `SKILL.md` to what Claude needs every time and move the rest to a file it names. A skill points at another
   skill's file as `${CLAUDE_PLUGIN_ROOT}/skills/...`.
-- **Skills have the same names in every plugin** (`cluster`, `setup`, `submit`, `jobs`), so `/<system>:submit`
-  means the same thing everywhere.
+- **Skills have the same names in every plugin** (`cluster`, `setup`, `submit`, `jobs`, `feedback`), so
+  `/<system>:submit` means the same thing everywhere.
+- **Nothing leaves the user's machine unseen.** The local log is local; a feedback report is a file the user
+  reads before `--send`, with secrets and names replaced by pattern. The skill that prepares it cannot be started
+  by the model (`disable-model-invocation`), and where reports go is each person's own setting.
+- **The transcript's format is not ours.** `feedback.py` reads Claude Code's session files, which change
+  between versions: read every field as optional, skip what does not fit, and never fail a report over one
+  record.
 - **A plugin's version** is `version` in its `plugin.json`. Users get an update only when it changes, so a
   commit that changes a plugin's files must change it; `tools/check_plugin_versions.py` refuses one that does not.
 - Tests: pytest functions named as sentences, no network and no real ssh (each plugin's `conftest.py` has a
@@ -62,8 +69,8 @@ those after it: `cli` > `hooks`, `sync` > `ssh`, `config` > `slurm` > `errors`.
 2. Rename what carries the helper's or the system's name, so that two plugins installed side by side never read
    each other's settings or answer for each other's commands:
    - `bin/jup`, `lib/jup/` and `slurm.HELPER`, by which the cost check knows its own helper in a command;
-   - `config.PROJECT_FILE` (`.jupiter.json`), `config.user_file` (`~/.config/hpc-tools/jupiter.json`) and the
-     `JUP_` prefix of the environment variables in `Config.load`;
+   - `config.PROJECT_FILE` (`.jupiter.json`), `config.user_file` (`~/.config/hpc-tools/jupiter.json`), the
+     `JUP_` prefix of the environment variables in `Config.load`, `journal.state_dir` and `feedback.PLUGIN`;
    - `hooks._NODE_PREFIXES` and `hooks._DOMAIN`, by which the cost check knows the system's own hosts, and the
      system's name in the texts of `hooks.py`;
    - the commands in `hooks/hooks.json`.

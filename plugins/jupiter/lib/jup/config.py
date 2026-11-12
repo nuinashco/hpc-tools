@@ -31,19 +31,29 @@ DEFAULTS: dict[str, Any] = {
     "max_time": "12:00:00",
     "ask_above_nodes": 1,
     "ask_above_core_hours": 300,
+    # Whether the helper keeps its local log of runs, which `jup feedback` reads.
+    "log": True,
+    # Where `jup feedback --send` files its report: this plugin's own repository.
+    "feedback_repo": "nuinashco/hpc-tools",
 }
 # Settings a repository's file may not set: the ssh alias is each person's own, and the
 # rest decide what the cost check sees.
-PERSONAL = frozenset({"host", "cores_per_node", "default_time", "max_time"})
+PERSONAL = frozenset(
+    {"host", "cores_per_node", "default_time", "max_time", "log", "feedback_repo"}
+)
 # Limits of the cost check: a repository's file may lower them, never raise them.
 LIMITS = frozenset({"ask_above_nodes", "ask_above_core_hours"})
 _LISTS = frozenset({"sync_exclude"})
 _NUMBERS = frozenset({"cores_per_node", *LIMITS})
 _TIMES = frozenset({"default_time", "max_time"})
+_SWITCHES = frozenset({"log"})
+_YES = frozenset({"true", "yes", "on", "1"})
+_NO = frozenset({"false", "no", "off", "0"})
 # What a value may hold. These strings reach command lines here and on the cluster, and
 # the text Claude is shown, so anything else is refused.
 _NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._@-]*$")
 _PATH = re.compile(r"^/[A-Za-z0-9._/{}-]+$")
+_REPOSITORY = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*/[A-Za-z0-9._-]+$")
 
 
 def user_file(env: Mapping[str, str] = os.environ) -> Path:
@@ -89,6 +99,10 @@ def check(key: str, value: Any) -> Any:
         if isinstance(value, bool) or not isinstance(value, (int, float)) or value < 0:
             raise ConfigError(f"{key} takes a number of 0 or more, not {value!r}")
         return value
+    if key in _SWITCHES:
+        if not isinstance(value, bool):
+            raise ConfigError(f"{key} takes true or false, not {value!r}")
+        return value
     if key == "account" and value is None:
         return None
     if not isinstance(value, str):
@@ -99,6 +113,10 @@ def check(key: str, value: Any) -> Any:
                 raise UserError("no time")
         except UserError:
             raise ConfigError(f"{key} takes a time limit such as 01:00:00") from None
+        return value
+    if key == "feedback_repo":
+        if not _REPOSITORY.match(value):
+            raise ConfigError(f"{key} takes a GitHub repository as owner/name")
         return value
     pattern = _PATH if key == "remote_dir" else _NAME
     if not pattern.match(value) or ".." in value.split("/"):
@@ -116,6 +134,11 @@ def parse(key: str, text: str) -> Any:
             return check(key, float(text) if "." in text else int(text))
         except ValueError:
             raise ConfigError(f"{key} takes a number, not {text!r}; pass one") from None
+    if key in _SWITCHES:
+        word = text.strip().lower()
+        if word not in _YES | _NO:
+            raise ConfigError(f"{key} takes true or false, not {text!r}")
+        return word in _YES
     return check(key, text)
 
 
@@ -164,6 +187,8 @@ class Config:
     max_time: str
     ask_above_nodes: float
     ask_above_core_hours: float
+    log: bool
+    feedback_repo: str
     # Where `push` copies from and what {project} names.
     root: Path
     sources: dict[str, str] = field(default_factory=dict, compare=False)
@@ -202,6 +227,8 @@ class Config:
             max_time=values["max_time"],
             ask_above_nodes=values["ask_above_nodes"],
             ask_above_core_hours=values["ask_above_core_hours"],
+            log=values["log"],
+            feedback_repo=values["feedback_repo"],
             root=root,
             sources=sources,
         )

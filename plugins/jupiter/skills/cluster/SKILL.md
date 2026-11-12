@@ -106,3 +106,9 @@ Read the file that matches the task before acting on it; each is short.
 
 For a first-time setup use the `setup` skill, to launch a job `submit`, to follow or
 diagnose one `jobs`.
+
+When the plugin itself was wrong (a fact here that no longer holds, a `jup` command
+that misbehaved, a cost check that asked wrongly or missed something), say so and tell
+the user they can report it with `/jupiter:feedback what went wrong`. Only they can
+start that: it shows them a report of this session's plugin part and sends it to the
+plugin's maintainers if they agree.

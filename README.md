@@ -51,6 +51,9 @@ The plugins follow one shape, so that moving between systems means learning the 
   project, pricing and submitting a job, waiting for it.
 - **A cost check**: Claude Code asks you before a submission above a limit you set, or one whose cost it cannot
   read for certain, and shows what it costs.
+- **A feedback command**: when the plugin gets something wrong, `/<system>:feedback` prepares a report of the
+  session's plugin part, with names and secrets taken out, and sends it to this repository's issues once you
+  have read it and agreed. That is how the plugins improve.
 
 ## Development
 

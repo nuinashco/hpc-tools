@@ -14,6 +14,7 @@ Usage:
     jup logs JOB [-n LINES]         the end of a job's output
     jup cancel JOB...
     jup budget                      the account's core-hours
+    jup feedback NOTE... | --send FILE | --discard FILE
 
 Commands that reach the cluster need the SSH connection the user opens with a TOTP
 code; without it they exit with code 66 and say what the user runs. A message that
@@ -23,6 +24,7 @@ starts with `jup:` comes from this command, anything else from the cluster.
 from __future__ import annotations
 
 import argparse
+import json
 import re
 import shlex
 import shutil
@@ -35,7 +37,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from jup import config as settings
-from jup import hooks, slurm, sync
+from jup import feedback, hooks, journal, slurm, sync
 from jup.config import Config
 from jup.errors import ConfigError, RemoteError, UserError
 from jup.ssh import MARK, Remote
@@ -577,6 +579,82 @@ def run_budget(arguments: Sequence[str], context: Context) -> int:
     return context.remote.execute(script, capture=False).returncode
 
 
+def read_version() -> str:
+    """Return the plugin's version from its manifest."""
+    manifest = LAUNCHER.parents[1] / ".claude-plugin" / "plugin.json"
+    try:
+        return str(json.loads(manifest.read_text()).get("version", "unknown"))
+    except (OSError, json.JSONDecodeError):
+        return "unknown"
+
+
+def run_feedback(arguments: Sequence[str], context: Context) -> int:
+    parser = argparse.ArgumentParser(prog="jup feedback")
+    parser.add_argument(
+        "note", nargs="*", help="what went wrong, in the user's words; - reads stdin"
+    )
+    parser.add_argument("--transcript", type=Path, help="default: the session in use")
+    parser.add_argument(
+        "--whole", action="store_true", help="every turn of the session"
+    )
+    parser.add_argument("--send", type=Path, metavar="FILE", help="file a report")
+    parser.add_argument("--discard", type=Path, metavar="FILE", help="delete a report")
+    options = parser.parse_args(arguments)
+    config = context.config
+    if options.discard:
+        feedback.check_report(options.discard).unlink()
+        print(f"deleted {options.discard}; nothing was sent")
+        return 0
+    if options.send:
+        report = feedback.check_report(options.send)
+        address = feedback.send(report, config.feedback_repo)
+        print(f"filed as {address}")
+        return 0
+    transcript = options.transcript
+    if transcript is None:
+        known = journal.last_session()
+        if known is None:
+            raise UserError(
+                "no Claude Code session is known to have used `jup` yet; pass the "
+                "session's file with --transcript (~/.claude/projects/<project>/"
+                "<session>.jsonl)"
+            )
+        transcript = Path(known["transcript"])
+        print(f"session: {transcript.stem}, last active {known.get('ts')}")
+    redact = feedback.Redactor.for_user(
+        login=context.remote.user() if context.remote.has_entry() else "",
+        account=config.account,
+    )
+    shown = {
+        "partition": config.partition,
+        "account": "set" if config.account else "not set",
+        "ask_above_nodes": config.ask_above_nodes,
+        "ask_above_core_hours": config.ask_above_core_hours,
+    }
+    # From standard input, text reaches here without passing through a shell.
+    note = sys.stdin.read() if options.note == ["-"] else " ".join(options.note)
+    built = feedback.build(
+        note,
+        transcript,
+        host=config.host,
+        redact=redact,
+        version=read_version(),
+        settings=shown,
+        whole=options.whole,
+    )
+    print(f"report: {built.path} ({built.characters:,} characters)")
+    print(
+        f"holds the latest {built.turns_shown} of {built.turns_related} turns that "
+        f"used the plugin (the session has {built.turns_total}), and the helper's log"
+    )
+    print(f"taken out: {built.redacted}")
+    print(
+        "nothing has been sent; after the user has read it and agreed, `jup feedback "
+        f"--send {built.path}` files it as an issue on {config.feedback_repo}"
+    )
+    return 0
+
+
 COMMANDS: dict[str, Callable[[Sequence[str], Context], int]] = {
     "doctor": run_doctor,
     "config": run_config,
@@ -590,6 +668,7 @@ COMMANDS: dict[str, Callable[[Sequence[str], Context], int]] = {
     "logs": run_logs,
     "cancel": run_cancel,
     "budget": run_budget,
+    "feedback": run_feedback,
 }
 
 
@@ -614,9 +693,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             # These hand their arguments on, so they have no parser to answer this.
             print(__doc__)
             return 0
-        cwd = Path.cwd()
-        config = Config.load(cwd)
-        return COMMANDS[name](rest, Context(cwd, config, Remote(config.host)))
+        return run_logged(name, rest)
     except UserError as error:
         print(f"jup: {error}", file=sys.stderr)
         return error.exit_code
@@ -628,3 +705,34 @@ def main(argv: Sequence[str] | None = None) -> int:
         return UserError.exit_code
     except KeyboardInterrupt:
         return 130
+
+
+def run_logged(name: str, rest: Sequence[str]) -> int:
+    """Run a command and note in the local log how it ended."""
+    started = time.monotonic()
+    # Set before the settings are read, so that a run they break is logged too.
+    logging, code, failure = True, 1, ""
+    try:
+        cwd = Path.cwd()
+        config = Config.load(cwd)
+        logging = config.log
+        code = COMMANDS[name](rest, Context(cwd, config, Remote(config.host)))
+        return code
+    except UserError as error:
+        code, failure = error.exit_code, f"{type(error).__name__}: {error}"
+        raise
+    except BaseException as error:
+        failure = type(error).__name__
+        raise
+    finally:
+        if logging:
+            journal.append(
+                {
+                    "kind": "run",
+                    "name": name,
+                    "args": [journal.clip(word) for word in rest],
+                    "exit": code,
+                    "seconds": round(time.monotonic() - started, 1),
+                    "error": journal.clip(failure),
+                }
+            )

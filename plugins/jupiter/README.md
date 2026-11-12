@@ -24,6 +24,7 @@ Then `/jupiter:setup`, or ask Claude to set up JUPITER for the repository you ar
 | Skill `setup` (`/jupiter:setup`) | first-time setup for a person or a repository |
 | Skill `submit` (`/jupiter:submit`) | batch script, copy, cheap checks, a small test, then the real submission |
 | Skill `jobs` (`/jupiter:jobs`) | queue, waiting, output, why a job failed or waits, cancelling, results, cost |
+| Skill `feedback` (`/jupiter:feedback`) | a report of the session's plugin part for the maintainers; only you can start it, and it is sent only on your yes |
 | Command `jup` | what the skills run; on the Bash tool's PATH while the plugin is enabled |
 | Cost check (a hook before each Bash command) | Claude Code asks you before a submission to JUPITER above your limits, or one whose cost cannot be read for certain |
 | Session note (a hook at session start) | in a repository with a `.jupiter.json`, tells Claude the account, the remote directory and whether the connection is open |
@@ -45,6 +46,7 @@ jup wait JOB [--until-running]  print each state change until the job ends
 jup logs JOB [-n LINES]         the end of a job's output
 jup cancel JOB...
 jup budget                      the account's core-hours
+jup feedback NOTE... | --send FILE | --discard FILE
 ```
 
 It needs Python 3.9 or later (the one that comes with Apple's command line tools is enough), `ssh`, `rsync` and
@@ -88,6 +90,8 @@ where each came from. Values are checked: names and paths may hold only plain ch
 | `ask_above_nodes` | `1` | the cost check asks before a command that reserves more nodes | only to lower it |
 | `ask_above_core_hours` | `300` | or more core-hours at most | only to lower it |
 | `cores_per_node` | `288` | what one node-hour is billed | no |
+| `log` | `true` | whether `jup` keeps its local log of runs | no |
+| `feedback_repo` | `nuinashco/hpc-tools` | where `jup feedback --send` files a report | no |
 | `default_time`, `max_time` | `01:00:00`, `12:00:00` | what the partition gives a job without a time limit, and at most | no |
 
 A repository you clone can therefore not point `jup` at another host, raise the limits of the cost check or
@@ -133,10 +137,32 @@ It is a second look, not a lock. It sees the command Claude is about to run and 
 the cluster that itself calls `sbatch`, or a file edited by other means, passes unseen. If the check cannot run
 at all, it asks. The question is denied automatically in non-interactive runs (`claude -p`).
 
+## Feedback
+
+When the plugin gets something wrong, `/jupiter:feedback what went wrong` turns the session into a report for
+its maintainers. It is how the skills and the helper get better, and it is built so that nothing leaves your
+machine unseen:
+
+- **A local log.** `jup` and the cost check note each run in `~/.local/state/hpc-tools/jupiter/log.jsonl`:
+  the command, its exit code and duration, and what the check decided. It never leaves the machine by itself;
+  `jup config set log false` turns it off.
+- **A report you read first.** `jup feedback NOTE` writes a Markdown file next to the log. It holds your note,
+  that log for the session, and the turns of the session's transcript in which the plugin was used: your
+  requests in those turns, the `jup`, `ssh` and Slurm commands with their output, and Claude's answers. Other
+  tool calls are only counted, and a long session keeps its latest turns (`--whole` includes every turn).
+- **Names and secrets taken out.** Tokens, private keys, values of anything named like a password, e-mail and
+  network addresses, your home path, and your login and project names become placeholders, and the report says
+  how many of each. This works by pattern and can miss things, which is why you read the file before it goes.
+- **Sent only on your yes.** `jup feedback --send FILE` files the report as an issue on `feedback_repo` with
+  your `gh` login; `--discard FILE` deletes it. Leave `jup feedback --send` out of your permission rules, so
+  that Claude Code asks you each time.
+
+The skill cannot be started by Claude, only by you.
+
 ## Removing it
 
-Uninstalling the plugin leaves what setup made outside it: `~/.config/hpc-tools/jupiter.json`, a repository's
-`.jupiter.json`, the permission rules you added, the `Host` entry in `~/.ssh/config`, and the copies on the cluster.
+Uninstalling the plugin leaves what setup made outside it: `~/.config/hpc-tools/jupiter.json`, the log and
+reports in `~/.local/state/hpc-tools/jupiter/`, a repository's `.jupiter.json`, the permission rules you added, the `Host` entry in `~/.ssh/config`, and the copies on the cluster.
 
 ## Where the facts come from
 

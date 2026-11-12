@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import io
+import json
 import shlex
 
 import pytest
 
-from jup import cli
+from jup import cli, journal
 from jup.errors import NoConnectionError, RemoteError, UserError
 from jup.ssh import MARK
 
@@ -365,3 +367,99 @@ def test_the_closed_connection_error_is_raised_before_any_remote_command(context
         cli.run_jobs([], context)
 
     assert run.ran("squeue") == []
+
+
+def write_session(tmp_path):
+    """Write a one-turn transcript that used the plugin, and return its path."""
+    records = [
+        {
+            "type": "user",
+            "timestamp": "2026-11-12T10:00:00.000Z",
+            "message": {"content": "check my jobs"},
+        },
+        {
+            "type": "assistant",
+            "timestamp": "2026-11-12T10:00:02.000Z",
+            "message": {
+                "content": [
+                    {
+                        "type": "tool_use",
+                        "id": "b",
+                        "name": "Bash",
+                        "input": {"command": "jup jobs"},
+                    }
+                ]
+            },
+        },
+    ]
+    path = tmp_path / "abc123.jsonl"
+    path.write_text("".join(json.dumps(record) + "\n" for record in records))
+    return path
+
+
+def test_a_report_is_prepared_from_the_session_that_last_used_the_helper(
+    context, tmp_path, capsys
+):
+    journal.remember_session("abc123", str(write_session(tmp_path)), str(context.cwd))
+
+    assert cli.run_feedback(["it", "said", "nothing"], context) == 0
+
+    printed = capsys.readouterr().out
+    assert "session: abc123" in printed and "nothing has been sent" in printed
+    [report] = (journal.state_dir() / "feedback").iterdir()
+    text = report.read_text()
+    assert text.startswith("# jupiter feedback: it said nothing") and "jup jobs" in text
+    assert "--send" in printed and "nuinashco/hpc-tools" in printed
+
+
+def test_without_a_known_session_the_transcript_must_be_named(context):
+    with pytest.raises(UserError, match="--transcript"):
+        cli.run_feedback(["note"], context)
+
+
+def test_a_note_from_standard_input_keeps_every_character(
+    context, tmp_path, monkeypatch
+):
+    monkeypatch.setattr("sys.stdin", io.StringIO('it ran $(rm -rf ~) `x`; "quoted"\n'))
+
+    cli.run_feedback(["-", "--transcript", str(write_session(tmp_path))], context)
+
+    [report] = (journal.state_dir() / "feedback").iterdir()
+    assert 'it ran $(rm -rf ~) `x`; "quoted"' in report.read_text()
+
+
+def test_a_report_can_be_discarded_and_only_a_report(context, tmp_path, capsys):
+    cli.run_feedback(["n", "--transcript", str(write_session(tmp_path))], context)
+    [report] = (journal.state_dir() / "feedback").iterdir()
+
+    assert cli.run_feedback(["--discard", str(report)], context) == 0
+    assert not report.exists()
+    with pytest.raises(UserError, match="no report"):
+        cli.run_feedback(["--send", str(tmp_path / "abc123.jsonl")], context)
+
+
+def test_every_run_is_noted_in_the_local_log_with_how_it_ended(
+    monkeypatch, settings_home, capsys
+):
+    monkeypatch.setenv("JUP_HOST", "jup-test.invalid")
+
+    cli.main(["cost", "-N", "2", "-t", "30"])
+    cli.main(["jobs"])
+
+    first, second = journal.read()
+    assert (first["name"], first["args"], first["exit"], first["error"]) == (
+        "cost",
+        ["-N", "2", "-t", "30"],
+        0,
+        "",
+    )
+    assert (second["name"], second["exit"]) == ("jobs", 66)
+    assert second["error"].startswith("NoConnectionError")
+
+
+def test_the_log_can_be_switched_off(monkeypatch, settings_home, capsys):
+    monkeypatch.setenv("JUP_LOG", "false")
+
+    cli.main(["cost", "-N", "2", "-t", "30"])
+
+    assert journal.read() == []
