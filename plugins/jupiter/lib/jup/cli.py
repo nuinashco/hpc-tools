@@ -13,7 +13,7 @@ Usage:
     jup wait JOB [--until-running]  print each state change until the job ends
     jup logs JOB [-n LINES]         the end of a job's output
     jup cancel JOB...
-    jup budget                      the account's core-hours
+    jup budget                      what the account has left
     jup feedback NOTE... | --send FILE | --discard FILE
 
 Commands that reach the cluster need the SSH connection the user opens with a TOTP
@@ -353,7 +353,7 @@ def run_cost(arguments: Sequence[str], context: Context) -> int:
     request = hooks.estimate(arguments, context.config, context.cwd)
     if request is None:
         raise UserError("the arguments only test; drop --dry-run or --test-only")
-    print(request.describe(context.config.cores_per_node))
+    print(request.describe(context.config.gpus_per_node))
     return 0
 
 
@@ -413,7 +413,7 @@ def run_submit(arguments: Sequence[str], context: Context) -> int:
     command = f"sbatch --parsable {quote([*added, *passed])}"
     if directories := slurm.find_output_directories(chosen):
         command = f"mkdir -p -- {quote(directories)} && {command}"
-    print(request.describe(config.cores_per_node))
+    print(request.describe(config.gpus_per_node))
     if "dry-run" in options:
         print(f"would run in {context.target()}: {command}")
         return 0
@@ -572,11 +572,27 @@ def run_cancel(arguments: Sequence[str], context: Context) -> int:
     return 0
 
 
+def describe_budget_unit(config: Config) -> str:
+    """Return how `jutil`'s core-hours turn into the hours this helper speaks of."""
+    cores = config.cores_per_node
+    text = (
+        f"jutil counts core-hours: on {config.partition} a node-hour is "
+        f"{cores:,} of them"
+    )
+    if config.gpus_per_node:
+        text += f" and a GPU-hour {cores / config.gpus_per_node:,.0f}"
+    return f"{text}; divide its numbers to compare them with `jup cost`"
+
+
 def run_budget(arguments: Sequence[str], context: Context) -> int:
     argparse.ArgumentParser(prog="jup budget").parse_args(arguments)
-    account = shlex.quote(context.config.need_account())
+    config = context.config
+    account = shlex.quote(config.need_account())
     script = f"jutil project cpuquota -p {account}"
-    return context.remote.execute(script, capture=False).returncode
+    code = context.remote.execute(script, capture=False).returncode
+    if code == 0:
+        print(describe_budget_unit(config))
+    return code
 
 
 def read_version() -> str:
@@ -629,7 +645,7 @@ def run_feedback(arguments: Sequence[str], context: Context) -> int:
         "partition": config.partition,
         "account": "set" if config.account else "not set",
         "ask_above_nodes": config.ask_above_nodes,
-        "ask_above_core_hours": config.ask_above_core_hours,
+        "ask_above_node_hours": config.ask_above_node_hours,
     }
     # From standard input, text reaches here without passing through a shell.
     note = sys.stdin.read() if options.note == ["-"] else " ".join(options.note)

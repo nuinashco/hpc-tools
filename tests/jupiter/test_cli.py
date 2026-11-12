@@ -33,7 +33,7 @@ def test_a_dry_submission_prints_the_cost_and_the_command_with_the_account(
 
     printed = capsys.readouterr().out
     assert code == 0
-    assert "1 node for up to 0:45:00: at most 216 core-hours" in printed
+    assert "1 node for up to 0:45:00: at most 0.75 node-hours (3 GPU-hours)" in printed
     assert (
         "mkdir -p -- logs && sbatch --parsable --account=proj --partition=booster "
         "-t 45 job.sbatch x"
@@ -463,3 +463,17 @@ def test_the_log_can_be_switched_off(monkeypatch, settings_home, capsys):
     cli.main(["cost", "-N", "2", "-t", "30"])
 
     assert journal.read() == []
+
+
+def test_the_budget_comes_with_how_its_core_hours_convert(context, run, capsys):
+    cli.run_budget([], context)
+
+    assert run.ran("jutil project cpuquota -p proj")
+    assert "a node-hour is 288 of them and a GPU-hour 72" in capsys.readouterr().out
+
+
+def test_a_budget_that_could_not_be_read_gets_no_note(context, run, capsys):
+    run.reply("jutil", code=1)
+
+    assert cli.run_budget([], context) == 1
+    assert capsys.readouterr().out == ""

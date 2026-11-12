@@ -11,8 +11,13 @@ works through one connection that you open, and it prices a job before submittin
 
 ```text
 /plugin marketplace add nuinashco/hpc-tools
+```
+
+```text
 /plugin install jupiter@hpc-tools
 ```
+
+Enter them one at a time: pasted together they are read as one command.
 
 Then `/jupiter:setup`, or ask Claude to set up JUPITER for the repository you are in.
 
@@ -45,7 +50,7 @@ jup jobs [--days N]             queued, running and recent jobs
 jup wait JOB [--until-running]  print each state change until the job ends
 jup logs JOB [-n LINES]         the end of a job's output
 jup cancel JOB...
-jup budget                      the account's core-hours
+jup budget                      what the account has left
 jup feedback NOTE... | --send FILE | --discard FILE
 ```
 
@@ -88,8 +93,9 @@ where each came from. Values are checked: names and paths may hold only plain ch
 | `remote_dir` | `/e/project1/{account}/{user}/{project}` | where the project is copied; `{project}` is the directory's name here, so a clone or worktree under another name goes elsewhere unless the path is written out | yes |
 | `sync_exclude` | none | directories (`notes/`) and globs (`*.ipynb`) that `jup push` leaves out | yes |
 | `ask_above_nodes` | `1` | the cost check asks before a command that reserves more nodes | only to lower it |
-| `ask_above_core_hours` | `300` | or more core-hours at most | only to lower it |
-| `cores_per_node` | `288` | what one node-hour is billed | no |
+| `ask_above_node_hours` | `1` | or more node-hours at most | only to lower it |
+| `gpus_per_node` | `4` | the GPUs that come with a node, for the cost in GPU-hours; `0` leaves that out | no |
+| `cores_per_node` | `288` | the core-hours `jutil` counts for a node-hour | no |
 | `log` | `true` | whether `jup` keeps its local log of runs | no |
 | `feedback_repo` | `nuinashco/hpc-tools` | where `jup feedback --send` files a report | no |
 | `default_time`, `max_time` | `01:00:00`, `12:00:00` | what the partition gives a job without a time limit, and at most | no |
@@ -124,14 +130,20 @@ Do not allow `Bash(jup *)`: `jup ssh` runs any command on the cluster as you, an
 `cancel` and `config set` spend the budget or change files.
 
 The cost check reads every Bash command before it runs. For `jup submit`, and for `sbatch`, `salloc` and `srun`
-inside `jup ssh` or `ssh` to JUPITER, it works out nodes x time x 288 from the options and the script's `#SBATCH`
-lines, and makes Claude Code ask you when
+inside `jup ssh` or `ssh` to JUPITER, it works out nodes x time from the options and the script's `#SBATCH`
+lines, in node-hours and GPU-hours, and makes Claude Code ask you when
 
-- the command reserves more than `ask_above_nodes` nodes or `ask_above_core_hours` core-hours, added up over
+- the command reserves more than `ask_above_nodes` nodes or `ask_above_node_hours` node-hours, added up over
   everything it submits;
 - the cost cannot be read for certain: no `--nodes` or `--time`, a script that is not on your machine, a loop, a
   shell variable, a `SBATCH_*` variable, a script on standard input, a command it cannot parse;
 - the command changes one of the check's own settings, or a job's limits with `scontrol update`.
+
+What a command is given to read, in a here-document, a here-string or a pipe, counts by who reads it. For a shell
+or `ssh` it is the commands it holds, on the machine that runs them. For `cat`, `git` and other programs that only
+read, it is data, and so is a Python or Node script that starts no program. The check asks about a script in
+another language that names a Slurm command or `jup` and can start programs, and about text it cannot read that
+names one and goes to a program it does not know.
 
 It is a second look, not a lock. It sees the command Claude is about to run and nothing behind it: a script on
 the cluster that itself calls `sbatch`, or a file edited by other means, passes unseen. If the check cannot run

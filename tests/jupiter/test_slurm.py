@@ -106,7 +106,28 @@ def test_command_options_win_over_the_scripts():
     asked = request({"nodes": "1-3", "time": "2:00:00"}, {"nodes": "8", "array": "0-1"})
 
     assert (asked.nodes, asked.seconds, asked.tasks, asked.doubts) == (3, 7200, 2, ())
-    assert asked.core_hours(288) == 2 * 3 * 288 * 2
+    assert asked.node_hours() == 2 * 3 * 2
+
+
+@pytest.mark.parametrize(
+    ("time", "gpus", "cost"),
+    [
+        ("12:00:00", 4, "at most 12 node-hours (48 GPU-hours)"),
+        ("40", 4, "at most 0.67 node-hours (2.67 GPU-hours)"),
+        ("15", 4, "at most 0.25 node-hours (1 GPU-hour)"),
+        ("1:00:00", 0, "at most 1 node-hour"),
+    ],
+)
+def test_a_cost_is_told_in_node_hours_and_in_gpu_hours_where_nodes_have_gpus(
+    time, gpus, cost
+):
+    assert request({"nodes": "1", "time": time}).describe(gpus).endswith(cost)
+
+
+def test_a_large_cost_is_told_in_whole_hours():
+    asked = request({"nodes": "100", "time": "12:00:00", "array": "0-1"})
+
+    assert asked.describe(4).endswith("at most 2,400 node-hours (9,600 GPU-hours)")
 
 
 @pytest.mark.parametrize(
@@ -125,7 +146,7 @@ def test_what_a_request_leaves_open_is_named(options, doubt):
     asked = request(options)
 
     assert any(doubt in text for text in asked.doubts)
-    assert "not certain" in asked.describe(288)
+    assert "not certain" in asked.describe(4)
 
 
 def test_no_limit_is_priced_at_the_partitions_longest_job():
@@ -246,3 +267,49 @@ def test_a_command_the_shell_would_not_read_gives_no_answer():
 )
 def test_only_a_job_number_passes_as_one(job, valid):
     assert bool(slurm.JOB_ID.match(job)) is valid
+
+
+@pytest.mark.parametrize(
+    ("command", "kept", "bodies"),
+    [
+        ("cat <<EOF\na\nEOF\nls", "cat << M0\nls", ["a"]),
+        ("cat <<'E O'\na 'b\nE O\nls", "cat << M0\nls", ["a 'b"]),
+        ("cat <<-EOF\n\ta\n\tEOF", "cat << M0", ["\ta"]),
+        ("cat <<A; cat <<B\n1\nA\n2\nB", "cat << M0; cat << M1", ["1", "2"]),
+        ("cat <<EOF \\\n  -n\na\nEOF", "cat << M0 \\\n  -n", ["a"]),
+        ("cat <<EOF\nnever closed", "cat << M0", ["never closed"]),
+    ],
+)
+def test_a_here_documents_body_is_lifted_out_of_its_command(command, kept, bodies):
+    lifted, found = slurm.lift_documents(command)
+
+    assert lifted.replace("JUP_HERE_DOCUMENT_", "M") == kept
+    assert list(found.values()) == bodies
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "cat <<< EOF\nls",
+        "echo $((1 << 4))\nls",
+        "echo 'a <<EOF'\nls\nEOF",
+        'python3 -c "\nx = 1 <<EOF\n"\nls',
+        "ls # <<EOF\npwd",
+    ],
+)
+def test_what_only_looks_like_a_here_document_stays(command):
+    assert slurm.lift_documents(command) == (command, {})
+
+
+def test_a_pipe_is_told_from_what_ends_a_command():
+    tokens = slurm.tokenize("a | b |&\n c || d; e |\n f")
+
+    assert tokens is not None
+    assert slurm.split_pipeline(tokens) == [
+        (["a"], True),
+        (["b"], True),
+        (["c"], False),
+        (["d"], False),
+        (["e"], True),
+        (["f"], False),
+    ]

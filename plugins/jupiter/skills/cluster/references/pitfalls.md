@@ -1,6 +1,6 @@
 # Mistakes already made on JUPITER
 
-Each of these cost time or core-hours on this system in November 2026. The first
+Each of these cost time or node-hours on this system in November 2026. The first
 group burns budget, the second wastes a day, the third confuses.
 
 ## Jobs that pay for nothing
@@ -13,9 +13,9 @@ group burns budget, the second wastes a day, the third confuses.
   results; resubmitting a finished batch still pays for start-up. Look at what is
   already there before submitting again.
 - **A full-size first run.** The first run of anything new goes to `develbooster`
-  with a handful of inputs and a short time limit. Ten minutes on one node cost 48
-  core-hours; a twelve-hour job that dies at minute seven costs about as much, but
-  the next one may die at hour eleven.
+  with a handful of inputs and a short time limit. Ten minutes on one node cost a
+  sixth of a node-hour; a twelve-hour job that dies at minute seven costs about as
+  much, but the next one may die at hour eleven.
 - **A test reservation that cannot start.** All eight `develbooster` nodes were
   drained one afternoon and the job waited with `ReqNodeNotAvail`. Check the
   reservation's nodes before submitting to it; the plain partition started short jobs

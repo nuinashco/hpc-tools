@@ -136,8 +136,8 @@ Leave `jup ssh`, `jup submit`, `jup push`, `jup pull`, `jup cancel` and `jup con
 set` to be asked about: `jup ssh` runs any command on the cluster as the user, and the
 others change files or spend the budget. Do not offer `Bash(jup *)`.
 
-The plugin's cost check asks before a submission above one node or 300 core-hours
-(the user's own settings `ask_above_nodes`, `ask_above_core_hours`), and whenever it
+The plugin's cost check asks before a submission above one node or one node-hour
+(the user's own settings `ask_above_nodes`, `ask_above_node_hours`), and whenever it
 cannot read a submission's cost for certain. It is a second look, not a lock: it reads
 the command Claude is about to run, so it does not see a script on the cluster that
 itself calls `sbatch`.
@@ -146,7 +146,7 @@ itself calls `sbatch`.
 
 Check now what would otherwise fail in the first job:
 
-- `jup budget`: the account has core-hours.
+- `jup budget`: the account has budget left.
 - Containers: `container` must be among the groups doctor lists. If not, the user
   requests "Container Runtime Engine" under Software in JuDoor.
 - An environment and any downloads have to be made on a login node, because jobs

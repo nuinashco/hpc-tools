@@ -78,8 +78,9 @@ affinity, accounting, known-issues, faq), read 2026-11-12, and jobs run in Novem
 
 ## Cost and budget
 
-- **Bill = nodes x 288 x hours of wall-clock time**, in core-hours, from start to end
-  of the allocation, idle or not. Nothing is refunded when a job fails, also when the
+- **Bill = nodes x hours of wall-clock time**, in node-hours (four GPU-hours each),
+  from start to end of the allocation, idle or not. `jutil` counts the same in
+  core-hours, 288 for a node-hour. Nothing is refunded when a job fails, also when the
   system caused it.
 - `jup cost SBATCH_ARGS` prices a request before it is made: it reads the options and
   the script's `#SBATCH` lines and assumes the full time limit. The real bill is the

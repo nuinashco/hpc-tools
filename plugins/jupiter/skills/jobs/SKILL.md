@@ -98,9 +98,9 @@ Cancel a job as soon as it is known to be wrong; the bill stops when it ends.
 jup ssh 'sacct -j JOB -X -o JobID,JobName%30,NNodes,Elapsed,State'
 ```
 
-Core-hours = nodes x 288 x elapsed hours. Report this with every result, and for
-failed and cancelled jobs too. `jup budget` shows the project's total, but only up to
-last midnight.
+Node-hours = nodes x elapsed hours, and GPU-hours four times that. Report both with
+every result, and for failed and cancelled jobs too. `jup budget` shows the project's
+total in core-hours (288 a node-hour), but only up to last midnight.
 
 ## Bringing results back
 

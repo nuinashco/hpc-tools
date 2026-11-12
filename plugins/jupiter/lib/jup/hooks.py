@@ -96,6 +96,15 @@ def guard_submission(
     hours = 0.0
     nodes = 0
     for submission in found:
+        if submission.kind == "program":
+            # It may reach the cluster by any route, whatever machine runs it.
+            unsure = True
+            lines.append(
+                "a script in another language that names a Slurm command or "
+                f"`{slurm.HELPER}` and can start programs, so what it submits cannot "
+                "be read"
+            )
+            continue
         if not aims_here(submission, config, here):
             continue
         if submission.kind == "config":
@@ -118,13 +127,14 @@ def guard_submission(
             if request is None:
                 continue
             unsure = unsure or bool(request.doubts or submission.doubts)
-            hours += request.core_hours(config.cores_per_node)
+            hours += request.node_hours()
             nodes += request.nodes * request.tasks
-            lines.append(request.describe(config.cores_per_node, submission.doubts))
-    over = hours > config.ask_above_core_hours or nodes > config.ask_above_nodes
+            lines.append(request.describe(config.gpus_per_node, submission.doubts))
+    over = hours > config.ask_above_node_hours or nodes > config.ask_above_nodes
     if not lines or not (unsure or over):
         return None
-    total = f" In all at most {hours:,.0f} core-hours." if len(lines) > 1 else ""
+    cost = slurm.describe_cost(hours, config.gpus_per_node)
+    total = f" In all at most {cost}." if len(lines) > 1 else ""
     return ask(f"This submits to JUPITER: {'; '.join(lines)}.{total} {_SHARED}")
 
 

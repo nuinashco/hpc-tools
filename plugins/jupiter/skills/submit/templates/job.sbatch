@@ -5,7 +5,7 @@
 #SBATCH --output=logs/%x-%j.out
 #
 # Submit from the project with `jup submit job.sbatch [arguments]`: it runs sbatch in the project's directory on
-# the cluster, adds the account, and creates logs/. One node for one hour is billed 288 core-hours.
+# the cluster, adds the account, and creates logs/. A node is billed whole, its four GPUs used or not.
 set -euo pipefail
 cd "${SLURM_SUBMIT_DIR:-$PWD}"
 
