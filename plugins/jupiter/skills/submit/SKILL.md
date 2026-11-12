@@ -58,8 +58,12 @@ jup push
 ```
 
 Push before submitting and not while a job of this project runs: the job reads the
-same files. `jup submit` compares the script here with the copy there and refuses when
-their `#SBATCH` lines differ, so a forgotten push shows up before anything is spent.
+same files. `jup submit` compares the files here with the copy there and refuses when
+any differs, naming them, so a forgotten push shows up before anything is spent. Then
+push and submit again. If a job of this project runs at that moment, a push would
+change the files under it: ask the user whether to push now, to wait for the job, or
+to submit the cluster's copy as it is (`jup submit --stale-ok ...`), and decide
+nothing yourself.
 
 ## 5. Check without spending
 

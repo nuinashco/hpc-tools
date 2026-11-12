@@ -15,6 +15,9 @@ from jup.ssh import MARK
 SCRIPT = "#!/bin/bash\n#SBATCH -N 1\n#SBATCH -t 30\n#SBATCH --output=logs/%j.out\n"
 
 
+STAMP = "commit: abc\nuncommitted files: 0\npushed: 2026-01-02T03:04:05Z\nfrom: repo\n"
+
+
 def marked(text):
     """Return lines as a remote command prints them through `Remote.read_lines`."""
     return "".join(f"{MARK}{line}\n" for line in text.splitlines())
@@ -76,6 +79,73 @@ def test_a_script_missing_on_the_cluster_points_to_push(context, script, run):
     run.reply("cat -- job.sbatch", code=1, err="cat: job.sbatch: No such file")
 
     with pytest.raises(RemoteError, match="jup push"):
+        cli.run_submit([script], context)
+
+
+def test_files_that_differ_from_the_pushed_copy_stop_the_submission(
+    context, script, run
+):
+    run.reply("cat -- job.sbatch", out=marked(SCRIPT))
+    run.reply("cat -- .synced_from", out=marked(STAMP))
+    run.reply("rsync", out="<f.st......|src/train.py\n<f+++++++++|conf/new.yaml\n")
+
+    with pytest.raises(RemoteError) as refusal:
+        cli.run_submit([script], context)
+
+    message = str(refusal.value)
+    assert "2 files differ here from the copy on the cluster (pushed 2026-01-02T" in (
+        message
+    )
+    assert "src/train.py, conf/new.yaml; run `jup push`" in message
+    assert "--stale-ok" in message
+    assert "--dry-run" in run.ran("rsync")[0]
+    assert run.ran("sbatch --parsable") == []
+
+
+def test_a_pushed_copy_that_matches_is_submitted(context, script, run):
+    run.reply("cat -- job.sbatch", out=marked(SCRIPT))
+    run.reply("cat -- .synced_from", out=marked(STAMP))
+    run.reply("rsync", out=".d..t......|src/\n")
+    run.reply("sbatch --parsable", out=marked("9"))
+
+    assert cli.run_submit([script], context) == 0
+
+
+def test_a_directory_that_no_push_made_is_not_compared(context, script, run):
+    run.reply("cat -- job.sbatch", out=marked(SCRIPT))
+    run.reply("sbatch --parsable", out=marked("9"))
+
+    assert cli.run_submit([script], context) == 0
+
+    assert run.ran("rsync") == []
+
+
+def test_a_stale_copy_is_submitted_when_asked_and_sbatch_never_sees_the_flag(
+    context, script, run
+):
+    run.reply("cat -- job.sbatch", out=marked(SCRIPT))
+    run.reply("sbatch --parsable", out=marked("9"))
+
+    cli.run_submit(["--stale-ok", script], context)
+
+    assert run.ran("rsync") == [] and run.ran(".synced_from") == []
+    assert "--stale-ok" not in run.ran("sbatch --parsable")[0]
+
+
+def test_a_wrapped_command_is_held_to_the_pushed_copy_as_well(context, run):
+    run.reply("cat -- .synced_from", out=marked(STAMP))
+    run.reply("rsync", out="<f.st......|train.py\n")
+
+    with pytest.raises(RemoteError, match="1 file differs here"):
+        cli.run_submit(["-N", "1", "-t", "5", "--wrap", "python train.py"], context)
+
+
+def test_a_comparison_that_fails_names_the_way_around_it(context, script, run):
+    run.reply("cat -- job.sbatch", out=marked(SCRIPT))
+    run.reply("cat -- .synced_from", out=marked(STAMP))
+    run.reply("rsync", code=12)
+
+    with pytest.raises(RemoteError, match="--stale-ok submits without it"):
         cli.run_submit([script], context)
 
 

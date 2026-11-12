@@ -64,6 +64,13 @@ def test_a_command_without_an_answer_names_the_hanging_connection(run):
         Remote("cluster", run=run).execute("squeue")
 
 
+def test_a_comparison_without_an_answer_names_the_hanging_connection(run):
+    run.fail("rsync", subprocess.TimeoutExpired("rsync", 120))
+
+    with pytest.raises(RemoteError, match="ssh -O exit cluster"):
+        Remote("cluster", run=run).copy(["-n", "a/", "cluster:b/"], capture=True)
+
+
 def test_lines_are_read_without_what_the_login_profile_printed(run):
     run.reply("bash -lc", out="Welcome to the cluster\nJUP|4711\nJUP|second\n")
 

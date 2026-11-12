@@ -63,6 +63,7 @@ def test_a_command_that_submits_nothing_passes(project, command):
     [
         ("jup submit missing.sbatch", "is not here to read"),
         ("jup submit -N 1 {script}", None),
+        ("jup submit --stale-ok -N 1 {script}", None),
         ("jup ssh -C 'sbatch --wrap=hostname'", "no --time"),
         ("jup ssh 'sbatch -N 1 --wrap=x'", "no --time"),
         ("jup submit --ntasks=2000 -t 10 --wrap=x", "--ntasks decides"),

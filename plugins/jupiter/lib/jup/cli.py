@@ -8,7 +8,7 @@ Usage:
     jup push [--dry-run] [--all]    copy the project to the cluster
     jup pull PATTERN... [--to DIR] [--dry-run]
     jup cost SBATCH_ARGS...         what a submission would reserve and cost
-    jup submit [--dry-run] SBATCH_ARGS...
+    jup submit [--dry-run] [--stale-ok] SBATCH_ARGS...
     jup jobs [--days N]             queued, running and recent jobs
     jup wait JOB [--until-running] [--idle-ok]
                                     print each state change until the job ends, or
@@ -365,6 +365,10 @@ def run_cost(arguments: Sequence[str], context: Context) -> int:
     return 0
 
 
+# Options of `jup submit` itself, which `sbatch` never sees.
+_OWN_OPTIONS = ("--dry-run", "--stale-ok")
+
+
 def read_remote_directives(context: Context, script: str) -> dict[str, str]:
     """Return the `#SBATCH` options of the copy of a script that the job will run."""
     try:
@@ -379,12 +383,48 @@ def read_remote_directives(context: Context, script: str) -> dict[str, str]:
     return slurm.read_directives("\n".join(lines))
 
 
+def check_copy(context: Context) -> None:
+    """Raise when the copy a push made on the cluster is behind the files here.
+
+    A directory there without a push's stamp is no copy of this one, so it passes.
+    """
+    target, config = context.target(), context.config
+    try:
+        stamp = context.remote.read_lines(
+            f"cat -- {sync.STAMP} 2>/dev/null || true", cwd=target
+        )
+    except RemoteError:
+        return
+    if not stamp:
+        return
+    try:
+        stale = sync.find_differing(
+            context.remote, config.root, target, config.sync_exclude
+        )
+    except RemoteError as error:
+        raise RemoteError(
+            f"{error} (this was the comparison of the files here with the cluster's "
+            "copy; --stale-ok submits without it)"
+        ) from error
+    if not stale:
+        return
+    times = [line.partition(": ")[2] for line in stamp if line.startswith("pushed: ")]
+    pushed = f" (pushed {times[0]})" if times else ""
+    count = "1 file differs" if len(stale) == 1 else f"{len(stale)} files differ"
+    names = ", ".join(stale[:8]) + (" ..." if len(stale) > 8 else "")
+    raise RemoteError(
+        f"{count} here from the copy on the cluster{pushed}, and the job would run "
+        f"that copy: {names}; run `jup push`, then submit again, or pass --stale-ok "
+        "to submit the cluster's copy as it is"
+    )
+
+
 def run_submit(arguments: Sequence[str], context: Context) -> int:
     config = context.config
     options, rest = slurm.parse_options(arguments)
     # Only before the script: what follows it is the script's own.
     head = arguments[: len(arguments) - len(rest)]
-    passed = [*(word for word in head if word != "--dry-run"), *rest]
+    passed = [*(word for word in head if word not in _OWN_OPTIONS), *rest]
     wrapped = "wrap" in options
     if not rest and not wrapped:
         raise UserError(
@@ -409,6 +449,8 @@ def run_submit(arguments: Sequence[str], context: Context) -> int:
                 "then submit again"
             )
         directives = there
+    if "dry-run" not in options and "stale-ok" not in options:
+        check_copy(context)
     request = slurm.Request.of(
         options, directives, default_time=config.default_time, max_time=config.max_time
     )
