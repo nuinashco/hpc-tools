@@ -42,6 +42,7 @@ into a sentence that says what to do.
 | `jup cost SBATCH_ARGS` | says what a submission reserves and its cost, without submitting |
 | `jup submit [--dry-run] SBATCH_ARGS` | `sbatch` in the project's directory, with the account added |
 | `jup jobs`, `jup wait JOB`, `jup logs JOB`, `jup cancel JOB` | queue and history, wait for the start or the end, read output, cancel |
+| `jup gpus JOB` | load and memory of each GPU of a running job, now |
 | `jup budget` | the account's budget in node-hours and GPU-hours: granted, used, left (as of last midnight) |
 | `jup config [set KEY VALUE [--project]]` | settings: per person, or per project in `.jupiter.json` |
 

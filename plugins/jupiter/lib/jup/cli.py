@@ -10,7 +10,10 @@ Usage:
     jup cost SBATCH_ARGS...         what a submission would reserve and cost
     jup submit [--dry-run] SBATCH_ARGS...
     jup jobs [--days N]             queued, running and recent jobs
-    jup wait JOB [--until-running]  print each state change until the job ends
+    jup wait JOB [--until-running] [--idle-ok]
+                                    print each state change until the job ends, or
+                                    until its GPUs sit idle (exit code 69)
+    jup gpus JOB                    a running job's GPUs now: load and memory
     jup logs JOB [-n LINES]         the end of a job's output
     jup cancel JOB...
     jup budget                      what the account has left
@@ -24,6 +27,7 @@ starts with `jup:` comes from this command, anything else from the cluster.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import re
 import shlex
@@ -33,11 +37,11 @@ import sys
 import time
 from collections import Counter
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 from jup import config as settings
-from jup import feedback, hooks, journal, slurm, sync
+from jup import feedback, gpus, hooks, journal, slurm, sync
 from jup.config import Config
 from jup.errors import ConfigError, RemoteError, UserError
 from jup.ssh import MARK, Remote
@@ -73,6 +77,9 @@ _SHARING = (
 # Commands whose arguments go to sbatch, scancel or the remote shell.
 _PASS_ON = frozenset({"ssh", "cost", "submit", "cancel"})
 _OUTPUT_FILE = re.compile(r"^\s*Std(?:Out|Err)=(.+)$")
+_JOB_FIELD = re.compile(r"^\s*(Command|WorkDir)=(.*)$", re.MULTILINE)
+# What `jup wait` exits with when it stops for a job whose GPUs sit idle.
+IDLE_GPUS = 69
 _SUBMITTED = re.compile(r"^\d+(;\S+)?$")
 
 
@@ -405,6 +412,9 @@ def run_submit(arguments: Sequence[str], context: Context) -> int:
         options, directives, default_time=config.default_time, max_time=config.max_time
     )
     chosen = {**directives, **options}
+    body = local.read_text(errors="replace") if local else ""
+    flags = slurm.find_gpu_flags(chosen, body, request.nodes, config.gpus_per_node)
+    request = replace(request, flags=tuple(flags))
     added = []
     if "account" not in chosen:
         added.append(f"--account={config.need_account()}")
@@ -414,6 +424,10 @@ def run_submit(arguments: Sequence[str], context: Context) -> int:
     if directories := slurm.find_output_directories(chosen):
         command = f"mkdir -p -- {quote(directories)} && {command}"
     print(request.describe(config.gpus_per_node))
+    if local and config.gpus_per_node:
+        with contextlib.suppress(ValueError):
+            inside = str(local.resolve().relative_to(config.root.resolve()))
+            print(f"GPU load: {hooks.describe_load(inside, config)}")
     if "dry-run" in options:
         print(f"would run in {context.target()}: {command}")
         return 0
@@ -467,6 +481,35 @@ def read_outcome(
     )
 
 
+def read_job_script(remote: Remote, job: str) -> str:
+    """Return a job's batch script as a path inside the directory it was submitted in.
+
+    Nothing for a job without one, or one whose script lies elsewhere.
+    """
+    shown = remote.execute(f"scontrol show job {job}")
+    fields = dict(_JOB_FIELD.findall(shown.stdout))
+    command = fields.get("Command", "").split(" ")[0]
+    directory = fields.get("WorkDir", "").rstrip("/")
+    if not directory or not command.startswith(f"{directory}/"):
+        return ""
+    return command[len(directory) + 1 :]
+
+
+def keep_load(watch: gpus.Watch, job: str, context: Context) -> None:
+    """Remember what a job's GPUs did, under the script it ran."""
+    script = read_job_script(context.remote, job)
+    if not script:
+        return
+    root = context.config.root
+    result = {
+        **watch.result(),
+        "job": job,
+        "when": journal.now(),
+        "digest": gpus.read_digest(root / script),
+    }
+    gpus.remember(gpus.name_script(root, script), result)
+
+
 def run_wait(
     arguments: Sequence[str],
     context: Context,
@@ -478,17 +521,22 @@ def run_wait(
     parser.add_argument(
         "--until-running", action="store_true", help="end as soon as the job runs"
     )
+    parser.add_argument(
+        "--idle-ok", action="store_true", help="go on waiting when GPUs are idle"
+    )
     options = parser.parse_args(arguments)
     if options.interval < LEAST_POLL_SECONDS:
         raise UserError(
             f"--interval is at least {LEAST_POLL_SECONDS} s: each look is a command "
             "on a shared login node"
         )
-    remote, job = context.remote, check_job(options.job)
+    remote, job, config = context.remote, check_job(options.job), context.config
+    warmup = slurm.parse_time(config.gpu_warmup)
+    watch = gpus.Watch.of(config.gpu_idle_minutes, options.interval)
     seen, misses = "", 0
     while True:
         look = remote.execute(
-            f"squeue --noheader --jobs={job} -o {shlex.quote(MARK + '%T|%M|%r')}"
+            f"squeue --noheader --jobs={job} -o {shlex.quote(MARK + '%T|%M|%r|%D|%l')}"
         )
         if look.returncode:
             # The queue forgets a job some minutes after it ended.
@@ -513,10 +561,11 @@ def run_wait(
             break
         states = Counter(row[0] for row in rows)
         if len(rows) == 1:
-            state, elapsed, reason = [*rows[0], "", ""][:3]
+            state, elapsed, reason, nodes, limit = [*rows[0], "", "", "", ""][:5]
             held = state == "PENDING" and reason not in {"", "None"}
             now = f"{state}{f' ({reason})' if held else ''} after {elapsed}"
         else:
+            state, elapsed, nodes, limit = "", "", "", ""
             now = ", ".join(
                 f"{count} {state}" for state, count in sorted(states.items())
             )
@@ -525,6 +574,14 @@ def run_wait(
             seen = now
         if options.until_running and "RUNNING" in states:
             return 0
+        if state == "RUNNING" and config.gpus_per_node and nodes.isdigit():
+            spent = read_seconds(elapsed)
+            if spent >= warmup:
+                watch.add(gpus.sample(remote, job, int(nodes)))
+            if watch.idle() and not options.idle_ok:
+                keep_load(watch, job, context)
+                report_idle(watch, job, int(nodes), spent, read_seconds(limit), config)
+                return IDLE_GPUS
         sleep(options.interval)
     rows = read_outcome(remote, job, sleep)
     for row in rows[:20]:
@@ -534,7 +591,70 @@ def run_wait(
         )
     if len(rows) > 20:
         print(f"... and {len(rows) - 20} more tasks; `jup jobs` lists them", flush=True)
+    if watch.readings:
+        keep_load(watch, job, context)
+        for line in watch.describe():
+            print(f"  {line}", flush=True)
     return 0 if all(row[1] == "COMPLETED" for row in rows) else 1
+
+
+def read_seconds(text: str) -> int:
+    """Return a time that Slurm printed as seconds; 0 for what is none."""
+    try:
+        return slurm.parse_time(text)
+    except UserError:
+        return 0
+
+
+def report_idle(
+    watch: gpus.Watch, job: str, nodes: int, spent: int, limit: int, config: Config
+) -> None:
+    """Print that a job's GPUs sit idle, what that costs, and what can be done."""
+    idle, total = len(watch.idle()), len(watch.means())
+    per_node = config.gpus_per_node
+    so_far = slurm.describe_cost(nodes * spent / 3600, per_node)
+    at_most = slurm.describe_cost(nodes * max(limit, spent) / 3600, per_node)
+    print(
+        f"{stamp()} job {job}: {idle} of its {total} GPUs idle in each of the last "
+        f"{watch.patience} readings, {slurm.format_time(spent)} into the job",
+        flush=True,
+    )
+    for line in watch.describe():
+        print(f"  {line}", flush=True)
+    print(
+        f"  it pays for all of them: {so_far} so far, {at_most} if it runs to its "
+        f"limit\n  tell the user: `jup cancel {job}` stops it, `jup wait {job} "
+        "--idle-ok` goes on waiting",
+        flush=True,
+    )
+
+
+def run_gpus(arguments: Sequence[str], context: Context) -> int:
+    parser = argparse.ArgumentParser(prog="jup gpus")
+    parser.add_argument("job")
+    options = parser.parse_args(arguments)
+    remote, job = context.remote, check_job(options.job)
+    rows = [
+        line.split("|")
+        for line in remote.read_lines(
+            f"squeue --noheader --jobs={job} -o {shlex.quote('%T|%D')}"
+        )
+    ]
+    if len(rows) != 1 or rows[0][0] != "RUNNING" or not rows[0][-1].isdigit():
+        state = rows[0][0] if len(rows) == 1 else "not one job in the queue"
+        raise UserError(
+            f"job {job} is {state}; its GPUs can be read while it runs, one job at "
+            "a time"
+        )
+    readings = gpus.sample(remote, job, int(rows[0][1]))
+    if not readings:
+        raise RemoteError(
+            f"the GPUs of job {job} could not be read; look at the job with `jup "
+            f"ssh 'srun --jobid={job} --overlap -n1 nvidia-smi'`"
+        )
+    for line in gpus.describe_readings(readings):
+        print(line)
+    return 0
 
 
 def run_logs(arguments: Sequence[str], context: Context) -> int:
@@ -766,6 +886,7 @@ COMMANDS: dict[str, Callable[[Sequence[str], Context], int]] = {
     "submit": run_submit,
     "jobs": run_jobs,
     "wait": run_wait,
+    "gpus": run_gpus,
     "logs": run_logs,
     "cancel": run_cancel,
     "budget": run_budget,

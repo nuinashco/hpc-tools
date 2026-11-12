@@ -6,7 +6,7 @@ import json
 
 import pytest
 
-from jup import hooks, journal
+from jup import gpus, hooks, journal
 from jup.config import Config
 from jup.ssh import Remote
 
@@ -63,7 +63,7 @@ def test_a_command_that_submits_nothing_passes(project, command):
     [
         ("jup submit missing.sbatch", "is not here to read"),
         ("jup submit -N 1 {script}", None),
-        ("jup ssh -C 'sbatch --wrap=hostname'", "no --nodes"),
+        ("jup ssh -C 'sbatch --wrap=hostname'", "no --time"),
         ("jup ssh 'sbatch -N 1 --wrap=x'", "no --time"),
         ("jup submit --ntasks=2000 -t 10 --wrap=x", "--ntasks decides"),
         ("jup submit -N 1 --time=0 --wrap=x", "no limit"),
@@ -328,3 +328,43 @@ def test_what_an_unknown_program_reads_is_taken_for_commands(project):
     assert "4 nodes" in reason(priced)
     assert "could not be read" in reason(unread)
     assert decide("at now <<EOF\nit's time for tea\nEOF\njup jobs", project) is None
+
+
+def test_what_the_job_itself_is_given_raises_no_question(project):
+    command = (
+        "jup submit --time=00:03:00 --wrap "
+        "'echo ${CUDA_VISIBLE_DEVICES-unset}; srun -n1 hostname'"
+    )
+
+    assert decide(command, project) is None
+
+
+@pytest.mark.parametrize(
+    ("option", "body", "flag"),
+    [
+        ("--gres=gpu:1", "", "asks for 1 of a node's 4 GPUs"),
+        ("", "export CUDA_VISIBLE_DEVICES=0\n", "shows its programs 1 of"),
+    ],
+)
+def test_a_small_job_that_leaves_gpus_unused_is_asked_about(
+    project, script, option, body, flag
+):
+    with (project / script).open("a") as file:
+        file.write(body)
+
+    assert flag in reason(decide(f"jup submit {option} {script}", project))
+
+
+def test_a_question_says_what_the_scripts_last_job_did_with_its_gpus(project, script):
+    command = f"jup submit -t 6:00:00 {script}"
+    never = reason(decide(command, project))
+    gpus.remember(
+        f"repo/{script}",
+        {"job": "77", "when": "2026-11-12T08:00:00Z", "gpus": 4, "loaded": 1},
+    )
+
+    assert f"About {script}: no job of this script has been measured" in never
+    assert (
+        f"About {script}: its last measured job (77, 2026-11-12) loaded 1 of 4 GPUs"
+        in reason(decide(command, project))
+    )

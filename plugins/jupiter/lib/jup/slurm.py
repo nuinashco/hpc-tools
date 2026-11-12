@@ -222,6 +222,8 @@ NAMES_A_SUBMITTER = re.compile(
 )
 # What stands for a here-document's body in a command once the body is lifted out.
 _MARK = "JUP_HERE_DOCUMENT_"
+# What a script lets its programs see of the node's GPUs.
+_VISIBLE_GPUS = re.compile(r"\bCUDA_VISIBLE_DEVICES=(\S*)")
 # Where a here-document's word ends.
 _WORD_ENDS = frozenset(" \t;&|()<>")
 # Letters of ssh that take a value (ssh(1), OpenSSH 9).
@@ -408,6 +410,10 @@ class Request:
     tasks: int
     # Why the real cost may be higher than these numbers give.
     doubts: tuple[str, ...] = ()
+    # What in the request leaves GPUs it pays for unused.
+    flags: tuple[str, ...] = ()
+    # The batch script it was read from, as a path inside the project.
+    script: str = ""
 
     @classmethod
     def of(
@@ -429,13 +435,10 @@ class Request:
             raise UserError(
                 f"{wanted!r} is no node count; write a number or a range such as 1-2"
             ) from None
-        if "nodes" not in merged:
-            hints = [f"--{name}" for name in _NODE_HINTS if name in merged]
-            doubts.append(
-                f"no --nodes, and {' '.join(hints)} decides how many"
-                if hints
-                else "no --nodes, one assumed"
-            )
+        # Without --nodes Slurm gives what the tasks need: one node for one task.
+        hints = [f"--{name}" for name in _NODE_HINTS if name in merged]
+        if "nodes" not in merged and hints:
+            doubts.append(f"no --nodes, and {' '.join(hints)} decides how many")
         limit = merged.get("time")
         if limit is None:
             doubts.append(f"no --time, the default {default_time} assumed")
@@ -463,7 +466,9 @@ class Request:
             f"{describe_cost(self.node_hours(), gpus_per_node)}"
         )
         doubts = [*self.doubts, *more]
-        return f"{text} (not certain: {'; '.join(doubts)})" if doubts else text
+        if doubts:
+            text = f"{text} (not certain: {'; '.join(doubts)})"
+        return f"{text}; {'; '.join(self.flags)}" if self.flags else text
 
 
 @dataclass(frozen=True)
@@ -675,6 +680,66 @@ def _drop_redirections(words: Sequence[str]) -> tuple[list[str], bool]:
     return kept, reads_input
 
 
+def holds_unknown(arguments: Sequence[str], kind: str) -> bool:
+    """Report whether a shell variable stands where it can change what is reserved.
+
+    That is in an option or in the script's name, not in what the job itself is
+    given to run.
+    """
+    try:
+        options, rest = parse_options(arguments, kind)
+    except UserError:
+        return any("$" in argument for argument in arguments)
+    head = arguments[: len(arguments) - len(rest)]
+    wrapped = options.get("wrap")
+    judged = [word for word in head if word not in (wrapped, f"--wrap={wrapped}")]
+    return any("$" in word for word in (*judged, *rest[:1]))
+
+
+def count_gpus(merged: Mapping[str, str], nodes: int) -> int | None:
+    """Return how many GPUs each node of a request gets; None when it names none."""
+
+    def count(text: str) -> int | None:
+        last = text.rpartition(":")[2]
+        return int(last) if last.isdigit() else None
+
+    for part in merged.get("gres", "").split(","):
+        if part == "gpu":
+            return 1
+        if part.startswith("gpu:"):
+            return count(part)
+    if "gpus-per-node" in merged:
+        return count(merged["gpus-per-node"])
+    total = count(merged["gpus"]) if "gpus" in merged else None
+    return None if total is None else -(-total // max(nodes, 1))
+
+
+def find_gpu_flags(
+    merged: Mapping[str, str], script: str, nodes: int, gpus_per_node: int
+) -> list[str]:
+    """Return what in a request or its script leaves GPUs of a node unused."""
+    flags: list[str] = []
+    asked = count_gpus(merged, nodes)
+    if asked is not None and asked < gpus_per_node:
+        flags.append(
+            f"it asks for {asked} of a node's {gpus_per_node} GPUs, and a node is "
+            "billed with all of them"
+        )
+    shown: set[str] = set()
+    for line in script.splitlines():
+        for value in _VISIBLE_GPUS.findall(line.partition("#")[0]):
+            if not re.fullmatch(r"\d+(,\d+)*", value.strip("\"';")):
+                # A variable gives each program its own: how many is not known here.
+                return flags
+            shown.update(value.strip("\"';").split(","))
+    if shown and len(shown) < gpus_per_node:
+        flags.append(
+            f"its script shows its programs {len(shown)} of a node's "
+            f"{gpus_per_node} GPUs (CUDA_VISIBLE_DEVICES)"
+        )
+    return flags
+
+
 def _read_inputs(words: Sequence[str], bodies: Mapping[str, str]) -> list[str]:
     """Return what a command reads from its here-documents and here-strings."""
     texts: list[str] = []
@@ -748,7 +813,7 @@ def scan(
             arguments, reads_input = _drop_redirections(rest)
             if reads_input:
                 doubts.append("its script comes from standard input")
-            if any("$" in argument for argument in arguments):
+            if holds_unknown(arguments, name):
                 doubts.append("it holds a shell variable whose value is not known here")
             if ":" in arguments:
                 doubts.append("a heterogeneous job, only its first part counted")
@@ -802,7 +867,7 @@ def _scan_helper(
     """Return what one command of the helper submits, given what it reads."""
     if words[:1] == ["submit"]:
         arguments, _ = _drop_redirections(words[1:])
-        if any("$" in argument for argument in arguments):
+        if holds_unknown(arguments, "sbatch"):
             doubts = (
                 *doubts,
                 "it holds a shell variable whose value is not known here",

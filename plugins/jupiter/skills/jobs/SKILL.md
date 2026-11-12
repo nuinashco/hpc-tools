@@ -37,6 +37,15 @@ background command reports nothing in between, so use `--until-running` to learn
 the start, look at the first output with `jup logs JOB`, then wait for the end. To see
 every state change as it happens, run `jup wait JOB` under the Monitor tool instead.
 
+**Exit code 69 means the job runs with idle GPUs.** After the job's warm-up (10
+minutes) `jup wait` reads each GPU once a minute, and when one stayed idle for 5
+minutes it stops and prints which, what the job has cost and what it will cost at
+most. The job goes on and nothing is cancelled. Tell the user at once, with those
+numbers, and let them choose: `jup cancel JOB`, or `jup wait JOB --idle-ok` to go on
+waiting. Do not choose for them, and do not go on waiting without asking. When a job
+ends, `jup wait` prints each GPU's mean load: report it with the result.
+`jup gpus JOB` shows the GPUs of a running job at any moment.
+
 `jup wait` looks once a minute, which is as often as a shared login node should be
 asked; do not write your own polling loop around `squeue`. It ends early with code 66
 if the user's connection drops (their machine slept, the network changed), and with

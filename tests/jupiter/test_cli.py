@@ -8,7 +8,7 @@ import shlex
 
 import pytest
 
-from jup import cli, feedback, journal
+from jup import cli, feedback, gpus, journal
 from jup.errors import NoConnectionError, RemoteError, UserError
 from jup.ssh import MARK
 
@@ -543,3 +543,116 @@ def test_discarding_a_report_deletes_its_digest_too(context, tmp_path, monkeypat
     cli.run_feedback(["--discard", str(report)], context)
 
     assert list((journal.state_dir() / "feedback").iterdir()) == []
+
+
+def running(elapsed):
+    return marked(f"RUNNING|{elapsed}|None|1|12:00:00")
+
+
+def loads(*values):
+    return marked("\n".join(f"n1, {i}, {load}, 0" for i, load in enumerate(values)))
+
+
+JOB = "JobId=7 JobName=x\n   Command=/e/p/repo/job.sbatch a b\n   WorkDir=/e/p/repo\n"
+
+
+def watch(context, *arguments):
+    """Wait for job 7 with a reading a minute, as the command does by default."""
+    return cli.run_wait(
+        ["7", *arguments, "--interval", "60"], context, sleep=lambda _: None
+    )
+
+
+def recall_loaded(name):
+    return (gpus.recall(name) or {}).get("loaded")
+
+
+def test_waiting_stops_when_gpus_the_job_pays_for_sit_idle(context, run, capsys):
+    for minute in range(10, 16):
+        run.reply("squeue --noheader --jobs=7", out=running(f"{minute}:00"))
+        run.reply("srun --jobid=7", out=loads(96, 0, 0, 0))
+    run.reply("scontrol show job 7", out=JOB)
+
+    code = watch(context)
+
+    printed = capsys.readouterr().out
+    assert code == cli.IDLE_GPUS == 69
+    assert "job 7: 3 of its 4 GPUs idle in each of the last 5 readings" in printed
+    assert "n1: GPU 0 96%, GPU 1 0%, GPU 2 0%, GPU 3 0%" in printed
+    assert "0.23 node-hours (0.93 GPU-hours) so far, 12 node-hours" in printed
+    assert "`jup cancel 7` stops it, `jup wait 7 --idle-ok` goes on" in printed
+    assert recall_loaded("repo/job.sbatch") == 1
+    assert len(run.ran("srun --jobid=7")) == 5
+
+
+def test_a_job_is_not_read_before_its_warm_up_nor_judged_by_one_reading(
+    context, run, capsys
+):
+    for elapsed in ("2:00", "9:59", "10:00", "11:00"):
+        run.reply("squeue --noheader --jobs=7", out=running(elapsed))
+    run.reply("squeue --noheader --jobs=7", out="")
+    for _ in range(2):
+        run.reply("srun --jobid=7", out=loads(0, 0, 0, 0))
+    run.reply("sacct --jobs=7", out=marked("7|COMPLETED|00:11:30|0:0"))
+    run.reply("scontrol show job 7", out=JOB)
+
+    assert watch(context) == 0
+
+    assert len(run.ran("srun --jobid=7")) == 2
+    assert "GPU 0 0%, GPU 1 0%" in capsys.readouterr().out
+    assert recall_loaded("repo/job.sbatch") == 0
+
+
+def test_idle_gpus_the_user_accepted_do_not_stop_the_wait(context, run, capsys):
+    for minute in range(10, 18):
+        run.reply("squeue --noheader --jobs=7", out=running(f"{minute}:00"))
+        run.reply("srun --jobid=7", out=loads(96, 0, 0, 0))
+    run.reply("squeue --noheader --jobs=7", out="")
+    run.reply("sacct --jobs=7", out=marked("7|COMPLETED|00:18:00|0:0"))
+
+    assert watch(context, "--idle-ok") == 0
+    assert "(mean load over 8 readings)" in capsys.readouterr().out
+
+
+def test_a_running_jobs_gpus_can_be_read_at_any_time(context, run, capsys):
+    run.reply("squeue --noheader --jobs=7", out=marked("RUNNING|1"))
+    run.reply("srun --jobid=7", out=marked("n1, 0, 97, 23807\nn1, 1, 0, 0"))
+
+    assert cli.run_gpus(["7"], context) == 0
+    assert capsys.readouterr().out == "n1: GPU 0 97% (23,807 MiB), GPU 1 0% (0 MiB)\n"
+
+
+def test_a_job_that_does_not_run_has_no_gpus_to_read(context, run):
+    run.reply("squeue --noheader --jobs=7", out=marked("PENDING|1"))
+
+    with pytest.raises(UserError, match="job 7 is PENDING"):
+        cli.run_gpus(["7"], context)
+
+
+def test_a_submission_says_what_is_known_of_the_scripts_gpu_load(context, capsys):
+    (context.config.root / "one.sbatch").write_text(
+        "#!/bin/bash\n#SBATCH -N 1\n#SBATCH -t 30\n#SBATCH --gres=gpu:1\n"
+    )
+
+    cli.run_submit(["--dry-run", "one.sbatch"], context)
+
+    printed = capsys.readouterr().out
+    assert "it asks for 1 of a node's 4 GPUs" in printed
+    assert "GPU load: no job of this script has been measured" in printed
+
+
+@pytest.mark.parametrize(
+    "command", ["(null)", "/e/elsewhere/job.sbatch", "/e/p/repository/job.sbatch"]
+)
+def test_a_job_without_a_script_of_the_project_leaves_no_result(context, run, command):
+    for minute in range(10, 12):
+        run.reply("squeue --noheader --jobs=7", out=running(f"{minute}:00"))
+        run.reply("srun --jobid=7", out=loads(96, 96, 96, 96))
+    run.reply("squeue --noheader --jobs=7", out="")
+    run.reply("sacct --jobs=7", out=marked("7|COMPLETED|00:12:00|0:0"))
+    run.reply(
+        "scontrol show job 7", out=f"   Command={command}\n   WorkDir=/e/p/repo\n"
+    )
+
+    assert watch(context) == 0
+    assert not (journal.state_dir() / gpus.MEMORY).exists()

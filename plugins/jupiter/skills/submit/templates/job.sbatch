@@ -15,10 +15,9 @@ cd "${SLURM_SUBMIT_DIR:-$PWD}"
 # Jobs have no internet: a library that tries a download should fail at once, not wait.
 export HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1
 
-# A task that srun starts sees one GPU, and JSC's page says a job with a single task does too. For one process
-# that should use all four, uncomment the next line; leave it out when srun gives each task its own GPU
-# (--gpus-per-task), since a value set here overrides that.
-# export CUDA_VISIBLE_DEVICES=0,1,2,3
+# This script and a single srun task see all four GPUs (CUDA_VISIBLE_DEVICES=0,1,2,3), and the node is billed
+# with all of them: a program written for one GPU leaves three paid for and idle. Start one process a GPU, or
+# use a launcher that spreads the work; `jup wait` reports GPUs that stay idle once the job has warmed up.
 
 # Scratch in the node's memory, fast and gone with the job. It counts as the job's memory.
 scratch=/dev/shm/${SLURM_JOB_ID:-$$}
