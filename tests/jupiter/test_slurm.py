@@ -267,3 +267,49 @@ def test_a_command_the_shell_would_not_read_gives_no_answer():
 )
 def test_only_a_job_number_passes_as_one(job, valid):
     assert bool(slurm.JOB_ID.match(job)) is valid
+
+
+@pytest.mark.parametrize(
+    ("command", "kept", "bodies"),
+    [
+        ("cat <<EOF\na\nEOF\nls", "cat << M0\nls", ["a"]),
+        ("cat <<'E O'\na 'b\nE O\nls", "cat << M0\nls", ["a 'b"]),
+        ("cat <<-EOF\n\ta\n\tEOF", "cat << M0", ["\ta"]),
+        ("cat <<A; cat <<B\n1\nA\n2\nB", "cat << M0; cat << M1", ["1", "2"]),
+        ("cat <<EOF \\\n  -n\na\nEOF", "cat << M0 \\\n  -n", ["a"]),
+        ("cat <<EOF\nnever closed", "cat << M0", ["never closed"]),
+    ],
+)
+def test_a_here_documents_body_is_lifted_out_of_its_command(command, kept, bodies):
+    lifted, found = slurm.lift_documents(command)
+
+    assert lifted.replace("JUP_HERE_DOCUMENT_", "M") == kept
+    assert list(found.values()) == bodies
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "cat <<< EOF\nls",
+        "echo $((1 << 4))\nls",
+        "echo 'a <<EOF'\nls\nEOF",
+        'python3 -c "\nx = 1 <<EOF\n"\nls',
+        "ls # <<EOF\npwd",
+    ],
+)
+def test_what_only_looks_like_a_here_document_stays(command):
+    assert slurm.lift_documents(command) == (command, {})
+
+
+def test_a_pipe_is_told_from_what_ends_a_command():
+    tokens = slurm.tokenize("a | b |&\n c || d; e |\n f")
+
+    assert tokens is not None
+    assert slurm.split_pipeline(tokens) == [
+        (["a"], True),
+        (["b"], True),
+        (["c"], False),
+        (["d"], False),
+        (["e"], True),
+        (["f"], False),
+    ]

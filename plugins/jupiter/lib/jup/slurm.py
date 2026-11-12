@@ -181,6 +181,49 @@ _WRAPPERS = frozenset(
 _WRAPPERS_WITH_A_WORD = frozenset({"timeout"})
 _LOOPS = frozenset({"for", "while", "until", "xargs", "parallel"})
 _SHELLS = frozenset({"bash", "sh", "zsh", "dash", "eval"})
+# Programs that hand their standard input on unchanged, or nearly: what they read
+# reaches the next command of a pipe.
+_FILTERS = frozenset(
+    {"cat", "tee", "sed", "grep", "tr", "head", "tail", "sort", "uniq", "cut"}
+)
+# Programs that only read their standard input: it is data, and runs nothing.
+_SINKS = frozenset(
+    {
+        "wc",
+        "jq",
+        "patch",
+        "dd",
+        "git",
+        "gh",
+        "curl",
+        "diff",
+        "base64",
+        "shasum",
+        "sha256sum",
+        "md5sum",
+        "xxd",
+        "pbcopy",
+        "less",
+        "more",
+    }
+)
+# Programs whose standard input is a script in a language this code does not read.
+_INTERPRETERS = re.compile(r"^(python[\d.]*|node|perl|ruby|php|lua|Rscript|awk)$")
+# Of these, the ones where only a call starts a program, which a pattern can find.
+_READABLE = re.compile(r"^(python[\d.]*|node)$")
+_STARTS_PROGRAMS = re.compile(
+    r"subprocess|popen|child_process|\bpty\b|\bos\.(?:system|exec|spawn|posix_spawn)"
+    r"|\b(?:system|exec\w*|spawn\w*)\s*\(",
+    re.IGNORECASE,
+)
+# The words one of which a text must hold to submit anything.
+NAMES_A_SUBMITTER = re.compile(
+    rf"\b(?:{'|'.join((*SUBMITTERS, 'scontrol', 'scrontab', HELPER))})\b"
+)
+# What stands for a here-document's body in a command once the body is lifted out.
+_MARK = "JUP_HERE_DOCUMENT_"
+# Where a here-document's word ends.
+_WORD_ENDS = frozenset(" \t;&|()<>")
 # Letters of ssh that take a value (ssh(1), OpenSSH 9).
 _SSH_VALUED = frozenset("BbcDEeFIiJLlmOopQRSWw")
 # What `scontrol update` can change that raises a job's cost.
@@ -427,8 +470,9 @@ class Request:
 class Submission:
     """One thing a shell command does that spends, or may spend, the budget."""
 
-    # A submitter (`sbatch`, `salloc`, `srun`), or `scontrol`, `scrontab` and `config`,
-    # which change what an earlier check allowed.
+    # A submitter (`sbatch`, `salloc`, `srun`); `scontrol`, `scrontab` and `config`,
+    # which change what an earlier check allowed; or `program`, a script in another
+    # language that may run any of them.
     kind: str
     arguments: tuple[str, ...]
     # How it reaches a cluster: `jup`, `ssh`, or `local` for this machine.
@@ -466,15 +510,121 @@ def tokenize(command: str) -> list[str] | None:
     return kept
 
 
-def split_commands(tokens: Sequence[str]) -> list[list[str]]:
-    """Return the words of each simple command, redirections included."""
-    commands: list[list[str]] = [[]]
+def _find_documents(
+    line: str, quote: str, depth: int, count: int
+) -> tuple[str, str, int, list[tuple[str, str, bool]]]:
+    """Return a line with each `<<WORD` as `<< MARK`, and the documents it opens.
+
+    `quote` is the quotation mark open where the line starts and `depth` how many
+    `((` are; both come back as they stand where it ends.
+    """
+    out: list[str] = []
+    opened: list[tuple[str, str, bool]] = []
+    index = 0
+    while index < len(line):
+        character = line[index]
+        if quote:
+            if character == "\\" and quote == '"':
+                out.append(line[index : index + 2])
+                index += 2
+                continue
+            if character == quote:
+                quote = ""
+        elif character == "\\":
+            out.append(line[index : index + 2])
+            index += 2
+            continue
+        elif character in "'\"":
+            quote = character
+        elif character == "#" and (index == 0 or line[index - 1] in " \t;&|("):
+            out.append(line[index:])
+            break
+        elif line.startswith("((", index):
+            depth += 1
+        elif line.startswith("))", index):
+            depth = max(depth - 1, 0)
+        elif line.startswith("<<<", index):
+            out.append("<<<")
+            index += 3
+            continue
+        # Inside `(( ))` it shifts a number.
+        elif line.startswith("<<", index) and not depth:
+            end = index + 2
+            strip_tabs = line.startswith("-", end)
+            end += strip_tabs
+            while end < len(line) and line[end] in " \t":
+                end += 1
+            start = end
+            inside = ""
+            while end < len(line) and (inside or line[end] not in _WORD_ENDS):
+                if line[end] in "'\"" and inside in ("", line[end]):
+                    inside = "" if inside else line[end]
+                end += 1
+            word = re.sub(r"[\\'\"]", "", line[start:end])
+            if word:
+                mark = f"{_MARK}{count + len(opened)}"
+                opened.append((mark, word, strip_tabs))
+                out.append(f"<< {mark}")
+                index = end
+                continue
+        out.append(character)
+        index += 1
+    return "".join(out), quote, depth, opened
+
+
+def lift_documents(command: str) -> tuple[str, dict[str, str]]:
+    """Return a command without the bodies of its here-documents, and the bodies.
+
+    Each body is named by the word left after its `<<`.
+    """
+    lines = command.split("\n")
+    kept: list[str] = []
+    bodies: dict[str, str] = {}
+    waiting: list[tuple[str, str, bool]] = []
+    quote, depth, index = "", 0, 0
+    while index < len(lines):
+        line, quote, depth, opened = _find_documents(
+            lines[index], quote, depth, len(bodies) + len(waiting)
+        )
+        index += 1
+        kept.append(line)
+        waiting += opened
+        # A body starts where the line ends, and a quotation or a backslash joins
+        # the next line to this one.
+        if quote or line.endswith("\\"):
+            continue
+        for mark, word, strip_tabs in waiting:
+            body: list[str] = []
+            while index < len(lines):
+                text = lines[index]
+                index += 1
+                if (text.lstrip("\t") if strip_tabs else text) == word:
+                    break
+                body.append(text)
+            bodies[mark] = "\n".join(body)
+        waiting = []
+    return "\n".join(kept), bodies
+
+
+def split_pipeline(tokens: Sequence[str]) -> list[tuple[list[str], bool]]:
+    """Return each simple command's words, and whether the next reads its output."""
+    commands: list[tuple[list[str], bool]] = []
+    words: list[str] = []
     for token in tokens:
         if token and all(character in _SEPARATORS for character in token):
-            commands.append([])
+            if words:
+                commands.append((words, token.strip("\n()") in ("|", "|&")))
+                words = []
         else:
-            commands[-1].append(token)
-    return [words for words in commands if words]
+            words.append(token)
+    if words:
+        commands.append((words, False))
+    return commands
+
+
+def split_commands(tokens: Sequence[str]) -> list[list[str]]:
+    """Return the words of each simple command, redirections included."""
+    return [words for words, _ in split_pipeline(tokens)]
 
 
 def _base(word: str) -> str:
@@ -525,20 +675,69 @@ def _drop_redirections(words: Sequence[str]) -> tuple[list[str], bool]:
     return kept, reads_input
 
 
+def _read_inputs(words: Sequence[str], bodies: Mapping[str, str]) -> list[str]:
+    """Return what a command reads from its here-documents and here-strings."""
+    texts: list[str] = []
+    for operator, word in zip(words, words[1:]):
+        if operator == "<<" and word in bodies:
+            texts.append(bodies[word])
+        elif operator == "<<<":
+            texts.append(word)
+    return texts
+
+
+def _scan_scripts(
+    texts: Sequence[str], *, route: str, host: str
+) -> list[Submission] | None:
+    """Return what texts submit that a shell reads as its commands."""
+    found: list[Submission] = []
+    for text in texts:
+        nested = scan(text, route=route, host=host)
+        if nested is not None:
+            found += nested
+        # Unreadable, and it can submit only by naming a way to.
+        elif NAMES_A_SUBMITTER.search(text):
+            return None
+    return found
+
+
+def _scan_handed_on(
+    words: Sequence[str], texts: Sequence[str], *, route: str, host: str
+) -> list[Submission] | None:
+    """Return what a command line submits that another shell runs, given its input."""
+    if words:
+        return scan(" ".join(words), route=route, host=host, stdin=texts)
+    # Without a command of its own, a shell runs what it reads.
+    return _scan_scripts(texts, route=route, host=host)
+
+
+def _may_run_programs(words: Sequence[str], texts: Sequence[str]) -> bool:
+    """Report whether a script in another language may submit something."""
+    named = [text for text in texts if NAMES_A_SUBMITTER.search(text)]
+    if any(_READABLE.match(_base(word)) for word in words):
+        return any(_STARTS_PROGRAMS.search(text) for text in named)
+    return bool(named)
+
+
 def scan(
-    command: str, *, route: str = "local", host: str = ""
+    command: str, *, route: str = "local", host: str = "", stdin: Sequence[str] = ()
 ) -> list[Submission] | None:
     """Return what a shell command submits, also inside the commands it hands on.
 
-    None when the command cannot be read as the shell reads it.
+    `stdin` is what its first command reads. None when the command cannot be read
+    as the shell reads it.
     """
-    tokens = tokenize(command)
+    lifted, bodies = lift_documents(command)
+    tokens = tokenize(lifted)
     if tokens is None:
         return None
-    commands = split_commands(tokens)
-    looped = any(_base(word) in _LOOPS for words in commands for word in words[:3])
+    commands = split_pipeline(tokens)
+    looped = any(_base(word) in _LOOPS for words, _ in commands for word in words[:3])
     found: list[Submission] = []
-    for raw in commands:
+    carried = list(stdin)
+    for raw, piped in commands:
+        texts = [*carried, *_read_inputs(raw, bodies)]
+        carried = []
         words, doubts = _strip_prefix(raw)
         if looped:
             doubts.append("it runs in a loop, so how many jobs it starts is not known")
@@ -563,21 +762,34 @@ def scan(
             )
             if costly:
                 found.append(Submission(name, tuple(rest), route, host))
-        elif name == HELPER:
-            nested = _scan_helper(rest, tuple(doubts))
-            if nested is None:
-                return None
-            found += nested
-        elif name == "ssh":
-            target, remote = _split_ssh(rest)
-            nested = scan(" ".join(remote), route="ssh", host=target) if remote else []
-            if nested is None:
-                return None
-            found += nested
-        elif name in _SHELLS:
-            script = rest[rest.index("-c") + 1 :][:1] if "-c" in rest else []
-            script = rest if name == "eval" else script
-            nested = scan(" ".join(script), route=route, host=host) if script else []
+        else:
+            plain, _ = _drop_redirections(rest)
+            nested: list[Submission] | None = []
+            if name == HELPER:
+                nested = _scan_helper(plain, tuple(doubts), texts)
+            elif name == "ssh":
+                target, remote = _split_ssh(plain)
+                nested = _scan_handed_on(remote, texts, route="ssh", host=target)
+            elif name in _SHELLS:
+                script = plain[plain.index("-c") + 1 :][:1] if "-c" in plain else []
+                script = plain if name == "eval" else script
+                nested = _scan_handed_on(script, texts, route=route, host=host)
+            elif name in _FILTERS:
+                carried = texts if piped else []
+            elif name in ("echo", "printf"):
+                carried = [" ".join(plain)] if piped else []
+            elif any(_INTERPRETERS.match(_base(word)) for word in words):
+                # A script given as an argument is read like one given as input.
+                given = [
+                    script
+                    for flag, script in zip(plain, plain[1:])
+                    if flag in ("-c", "-e")
+                ]
+                if _may_run_programs(words, [*texts, *given]):
+                    found.append(Submission("program", (), route, host))
+            elif name not in _SINKS:
+                # A program this code does not know may run what it reads.
+                nested = _scan_scripts(texts, route=route, host=host)
             if nested is None:
                 return None
             found += nested
@@ -585,9 +797,9 @@ def scan(
 
 
 def _scan_helper(
-    words: Sequence[str], doubts: tuple[str, ...]
+    words: Sequence[str], doubts: tuple[str, ...], texts: Sequence[str] = ()
 ) -> list[Submission] | None:
-    """Return what one command of the helper submits."""
+    """Return what one command of the helper submits, given what it reads."""
     if words[:1] == ["submit"]:
         arguments, _ = _drop_redirections(words[1:])
         if any("$" in argument for argument in arguments):
@@ -598,7 +810,7 @@ def _scan_helper(
         return [Submission("sbatch", tuple(arguments), HELPER, doubts=doubts)]
     if words[:1] == ["ssh"]:
         remote = [word for word in words[1:] if word != "-C"]
-        return scan(" ".join(remote), route=HELPER) if remote else []
+        return _scan_handed_on(remote, texts, route=HELPER, host="")
     if words[:2] == ["config", "set"] and words[2:3] and words[2] in GUARD_SETTINGS:
         return [Submission("config", tuple(words[2:]), HELPER)]
     return []

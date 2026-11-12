@@ -134,6 +134,12 @@ lines, in node-hours and GPU-hours, and makes Claude Code ask you when
   shell variable, a `SBATCH_*` variable, a script on standard input, a command it cannot parse;
 - the command changes one of the check's own settings, or a job's limits with `scontrol update`.
 
+What a command is given to read, in a here-document, a here-string or a pipe, counts by who reads it. For a shell
+or `ssh` it is the commands it holds, on the machine that runs them. For `cat`, `git` and other programs that only
+read, it is data, and so is a Python or Node script that starts no program. The check asks about a script in
+another language that names a Slurm command or `jup` and can start programs, and about text it cannot read that
+names one and goes to a program it does not know.
+
 It is a second look, not a lock. It sees the command Claude is about to run and nothing behind it: a script on
 the cluster that itself calls `sbatch`, or a file edited by other means, passes unseen. If the check cannot run
 at all, it asks. The question is denied automatically in non-interactive runs (`claude -p`).

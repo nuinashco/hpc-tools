@@ -96,6 +96,15 @@ def guard_submission(
     hours = 0.0
     nodes = 0
     for submission in found:
+        if submission.kind == "program":
+            # It may reach the cluster by any route, whatever machine runs it.
+            unsure = True
+            lines.append(
+                "a script in another language that names a Slurm command or "
+                f"`{slurm.HELPER}` and can start programs, so what it submits cannot "
+                "be read"
+            )
+            continue
         if not aims_here(submission, config, here):
             continue
         if submission.kind == "config":

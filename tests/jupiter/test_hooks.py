@@ -99,6 +99,13 @@ def test_a_test_flag_counts_only_where_sbatch_reads_it(project, script):
     )
 
 
+def test_one_node_asks_once_it_can_cost_more_than_the_limit(project, script):
+    asked = decide(f"jup submit -N 1 -t 2:00:00 {script}", project)
+
+    assert decide(f"jup submit -N 1 -t 1:00:00 {script}", project) is None
+    assert "at most 2 node-hours (8 GPU-hours)" in reason(asked)
+
+
 def test_submissions_in_one_command_are_added_up(project, script):
     one = f"jup submit -N 1 -t 40 {script}"
 
@@ -241,3 +248,83 @@ def test_the_check_writes_no_log_when_the_log_is_off(project, monkeypatch):
     hooks.run("pre-bash", json.dumps(event), project)
 
     assert journal.read() == [] and journal.last_session() is None
+
+
+NOTES = """cd docs && python3 - <<'EOF'
+from pathlib import Path
+
+text = Path("guide.md").read_text()
+# The guide's own words: it doesn't run any of this.
+text = text.replace("sbatch job.sbatch", "jup submit -N 64 -t 12:00:00 job.sbatch")
+Path("guide.md").write_text(text)
+EOF
+git diff --stat | head -12"""
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        NOTES,
+        "cat > notes.md <<'EOF'\nrun sbatch -N 64 job.sh, and don't forget\nEOF",
+        "jup feedback - <<'JUP_NOTE'\nthe sbatch line wasn't priced\nJUP_NOTE",
+        "git commit -F - <<EOF\nfix: price sbatch -N 64 in a loop\nEOF",
+        "grep -c sbatch <<EOF\nsbatch -N 64 job.sh\nEOF",
+        "cat <<EOF | wc -l\nsbatch -N 64 job.sh\nEOF",
+        "cat > a.txt <<EOF\nsbatch -N 64 job.sh\nEOF\nssh hpc-jupiter bash -c ls",
+    ],
+)
+def test_text_that_only_names_a_submission_is_not_one(project, command):
+    assert decide(command, project, on_cluster=True) is None
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "ssh hpc-jupiter bash <<'EOF'\ncd proj\nsbatch -N 4 -t 2:00:00 job.sh\nEOF",
+        "ssh hpc-jupiter <<EOF\nsbatch -N 4 -t 2:00:00 job.sh\nEOF",
+        "ssh -o BatchMode=yes hpc-jupiter 'bash -ls' <<'EOF' 2>&1 | grep -v tty\n"
+        "sbatch -N 4 -t 2:00:00 job.sh\nEOF",
+        "jup ssh -C bash <<EOF\nsbatch -N 4 -t 2:00:00 job.sh\nEOF",
+        "cat <<EOF | ssh hpc-jupiter bash\nsbatch -N 4 -t 2:00:00 job.sh\nEOF",
+        "cat <<EOF | sed s/x/y/ |\nsbatch -N 4 -t 2:00:00 job.sh\nEOF\n"
+        "  ssh hpc-jupiter bash",
+        "echo 'sbatch -N 4 -t 2:00:00 job.sh' | ssh hpc-jupiter bash",
+        "ssh hpc-jupiter bash <<< 'sbatch -N 4 -t 2:00:00 job.sh'",
+        "ssh hpc-jupiter bash <<-EOF\n\tsbatch -N 4 -t 2:00:00 job.sh\n\tEOF",
+    ],
+)
+def test_a_submission_that_a_shell_reads_is_priced(project, command):
+    assert "4 nodes for up to 2:00:00: at most 8 node-hours" in reason(
+        decide(command, project)
+    )
+
+
+def test_what_a_local_shell_reads_is_read_as_its_commands(project, script):
+    command = f"bash <<EOF\njup submit -N 2 -t 6:00:00 {script}\nEOF"
+
+    assert "2 nodes for up to 6:00:00" in reason(decide(command, project))
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "python3 - <<'EOF'\nimport subprocess\n"
+        "subprocess.run(['jup', 'submit', 'job.sbatch'])\nEOF",
+        "uv run python - <<'EOF'\nimport os\nos.system('sbatch job.sh')\nEOF",
+        "python3 -c \"import subprocess; subprocess.run(['sbatch', 'job.sh'])\"",
+        "perl <<'EOF'\nprint `sbatch job.sh`;\nEOF",
+    ],
+)
+def test_a_script_in_another_language_that_can_submit_is_asked_about(project, command):
+    assert "a script in another language" in reason(decide(command, project))
+
+
+def test_what_an_unknown_program_reads_is_taken_for_commands(project):
+    priced = decide(
+        "at now <<EOF\nsbatch -N 4 -t 1:00:00 job.sh\nEOF", project, on_cluster=True
+    )
+    unread = decide("at now <<EOF\nit's time: sbatch job.sh\nEOF", project)
+
+    assert "4 nodes" in reason(priced)
+    assert "could not be read" in reason(unread)
+    assert decide("at now <<EOF\nit's time for tea\nEOF\njup jobs", project) is None
