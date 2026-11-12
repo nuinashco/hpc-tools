@@ -701,12 +701,47 @@ def run_logs(arguments: Sequence[str], context: Context) -> int:
     return context.remote.execute(script, capture=False).returncode
 
 
+def read_ended(remote: Remote, jobs: Sequence[str]) -> dict[str, str]:
+    """Return how each job ended that accounting shows as ended.
+
+    Left out, for `scancel` to judge: a job that waits or runs, an array with such
+    a task, and a job that accounting does not know or cannot be asked about.
+    """
+    try:
+        lines = remote.read_lines(
+            f"sacct --jobs={','.join(jobs)} -X -n -P -o {_OUTCOME}"
+        )
+    except RemoteError:
+        return {}
+    rows = [
+        row
+        for row in (line.split("|") for line in lines)
+        if len(row) >= 4 and row[1].strip()
+    ]
+    ended: dict[str, str] = {}
+    for job in jobs:
+        own = [row for row in rows if row[0] == job or row[0].startswith(f"{job}_")]
+        if not own or any(row[1].split()[0] in _UNFINISHED for row in own):
+            continue
+        if len(own) == 1:
+            ended[job] = f"{own[0][1]} after {own[0][2]}"
+        else:
+            states = ", ".join(sorted({row[1] for row in own}))
+            ended[job] = f"{len(own)} tasks: {states}"
+    return ended
+
+
 def run_cancel(arguments: Sequence[str], context: Context) -> int:
     if not arguments:
         raise UserError("no job named; write `jup cancel JOB...`")
     jobs = [check_job(argument) for argument in arguments]
-    context.remote.read(f"scancel {quote(jobs)}")
-    print(f"cancelled {' '.join(jobs)}")
+    ended = read_ended(context.remote, jobs)
+    alive = [job for job in jobs if job not in ended]
+    if alive:
+        context.remote.read(f"scancel {quote(alive)}")
+        print(f"cancelled {' '.join(alive)}")
+    for job, how in ended.items():
+        print(f"job {job} had already ended ({how}): nothing to cancel")
     return 0
 
 

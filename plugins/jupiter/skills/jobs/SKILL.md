@@ -113,8 +113,9 @@ jup cancel JOB
 ```
 
 Cancel a job as soon as it is known to be wrong; the bill stops when it ends.
-`jup cancel` takes job numbers only. Ending every job of the user at once
-(`jup ssh 'scancel --me'`) is for their explicit word alone.
+`jup cancel` takes job numbers only. When it answers that a job had already ended,
+nothing was saved: say so, and report what the job cost in full. Ending every job of
+the user at once (`jup ssh 'scancel --me'`) is for their explicit word alone.
 
 ## What it cost
 

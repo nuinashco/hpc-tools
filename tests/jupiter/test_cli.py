@@ -209,6 +209,54 @@ def test_cancelling_names_the_jobs(context, run, capsys):
     assert run.ran("scancel")[0].endswith("'scancel 7 8_1'")
 
 
+def test_cancelling_says_which_jobs_had_already_ended_and_cancels_the_rest(
+    context, run, capsys
+):
+    run.reply(
+        "sacct --jobs=7,8,9",
+        out=marked(
+            "7|COMPLETED|00:09:06|0:0\n8|RUNNING|00:01:00|0:0\n"
+            "9_1|COMPLETED|00:02:00|0:0\n9_2|FAILED|00:00:10|1:0"
+        ),
+    )
+
+    assert cli.run_cancel(["7", "8", "9"], context) == 0
+
+    printed = capsys.readouterr().out
+    assert "job 7 had already ended (COMPLETED after 00:09:06): nothing to" in printed
+    assert "job 9 had already ended (2 tasks: COMPLETED, FAILED)" in printed
+    assert "cancelled 8\n" in printed
+    assert run.ran("scancel")[0].endswith("'scancel 8'")
+
+
+def test_nothing_is_cancelled_when_every_named_job_had_ended(context, run, capsys):
+    run.reply("sacct --jobs=7", out=marked("7|CANCELLED by 1000|00:02:55|0:0"))
+
+    assert cli.run_cancel(["7"], context) == 0
+
+    assert run.ran("scancel") == []
+    assert "cancelled 7" not in capsys.readouterr().out
+
+
+def test_an_array_with_an_unfinished_task_is_cancelled(context, run):
+    run.reply(
+        "sacct --jobs=9",
+        out=marked("9_1|COMPLETED|00:02:00|0:0\n9_[2-4]|PENDING|00:00:00|0:0"),
+    )
+
+    cli.run_cancel(["9"], context)
+
+    assert run.ran("scancel")[0].endswith("'scancel 9'")
+
+
+def test_jobs_are_cancelled_also_when_accounting_does_not_answer(context, run):
+    run.reply("sacct --jobs=7", code=1, err="sacct: error: connection refused")
+
+    cli.run_cancel(["7"], context)
+
+    assert run.ran("scancel")[0].endswith("'scancel 7'")
+
+
 def test_logs_are_read_from_the_files_slurm_names_whatever_their_names_hold(
     context, run
 ):

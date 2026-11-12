@@ -51,7 +51,7 @@ jup jobs [--days N]             queued, running and recent jobs
 jup wait JOB [--until-running]  print each state change until the job ends
 jup gpus JOB                    a running job's GPUs now: load and memory
 jup logs JOB [-n LINES]         the end of a job's output
-jup cancel JOB...
+jup cancel JOB...               stop jobs; says which had already ended
 jup budget [--raw]              the account's budget in node-hours and GPU-hours: granted, used, left
 jup feedback NOTE... | --digest REPORT | --send FILE | --discard FILE
 ```
