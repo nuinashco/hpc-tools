@@ -29,9 +29,8 @@ Enter them one at a time: pasted together they are read as one command.
 Then ask Claude to set you up ("set up JUPITER for this repo"), or run the plugin's setup skill
 (`/jupiter:setup`). The plugin's own page says what it adds and how to configure it.
 
-The repository is private: Claude Code fetches it with your own git credentials (`gh auth login`, then
-`gh auth setup-git`). A marketplace like this one does not update by itself: `/plugin marketplace update
-hpc-tools`.
+A marketplace like this one does not update by itself: `/plugin marketplace update hpc-tools`, then update
+the plugin in `/plugin` and run `/reload-plugins`.
 
 To have a repository suggest a plugin to everyone who works in it, commit this to its `.claude/settings.json`;
 each person still runs `claude plugin install jupiter@hpc-tools --scope project` once in each clone (or installs

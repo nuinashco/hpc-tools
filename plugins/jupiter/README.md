@@ -29,7 +29,8 @@ Then `/jupiter:setup`, or ask Claude to set up JUPITER for the repository you ar
 | Skill `setup` (`/jupiter:setup`) | first-time setup for a person or a repository |
 | Skill `submit` (`/jupiter:submit`) | batch script, copy, cheap checks, a small test, then the real submission |
 | Skill `jobs` (`/jupiter:jobs`) | queue, waiting, output, why a job failed or waits, cancelling, results, cost |
-| Skill `feedback` (`/jupiter:feedback`) | a report of the session's plugin part for the maintainers; only you can start it, and it is sent only on your yes |
+| Skill `feedback` (`/jupiter:feedback`) | a report of the session's plugin part and a short digest of it for the maintainers; only you can start it, and the digest is sent only on your yes |
+| Agent `feedback-digest` | the small model (Haiku) that writes that digest from the report alone |
 | Command `jup` | what the skills run; on the Bash tool's PATH while the plugin is enabled |
 | Cost check (a hook before each Bash command) | Claude Code asks you before a submission to JUPITER above your limits, or one whose cost cannot be read for certain |
 | Session note (a hook at session start) | in a repository with a `.jupiter.json`, tells Claude the account, the remote directory and whether the connection is open |
@@ -50,8 +51,8 @@ jup jobs [--days N]             queued, running and recent jobs
 jup wait JOB [--until-running]  print each state change until the job ends
 jup logs JOB [-n LINES]         the end of a job's output
 jup cancel JOB...
-jup budget                      what the account has left
-jup feedback NOTE... | --send FILE | --discard FILE
+jup budget [--raw]              the account's budget in node-hours and GPU-hours: granted, used, left
+jup feedback NOTE... | --digest REPORT | --send FILE | --discard FILE
 ```
 
 It needs Python 3.9 or later (the one that comes with Apple's command line tools is enough), `ssh`, `rsync` and
@@ -165,9 +166,14 @@ machine unseen:
 - **Names and secrets taken out.** Tokens, private keys, values of anything named like a password, e-mail and
   network addresses, your home path, and your login and project names become placeholders, and the report says
   how many of each. This works by pattern and can miss things, which is why you read the file before it goes.
-- **Sent only on your yes.** `jup feedback --send FILE` files the report as an issue on `feedback_repo` with
-  your `gh` login; `--discard FILE` deletes it. Leave `jup feedback --send` out of your permission rules, so
-  that Claude Code asks you each time.
+- **A digest is what goes.** This repository is public, so an issue on it can be read by anyone. A small
+  model that sees only the report writes a digest of at most a page: your note, the `jup` and Slurm commands
+  that mattered with the line that went wrong, what was expected, the plugin's version. It leaves out what you
+  were working on, and names and secrets are taken out of it once more. The report itself stays on your machine.
+- **Sent only on your yes.** You are shown the whole digest and told who can read it where it goes.
+  `jup feedback --send FILE` then files it as an issue on `feedback_repo` with your `gh` login; `--discard FILE`
+  deletes the report and its digest. Leave `jup feedback --send` out of your permission rules, so that Claude
+  Code asks you each time.
 
 The skill cannot be started by Claude, only by you.
 

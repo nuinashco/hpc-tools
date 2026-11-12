@@ -92,8 +92,8 @@ was cut by its time limit has not tested stage two.
 
 Tell the user in one sentence what the real run reserves and costs (`jup cost` prints
 it: nodes, time limit, node-hours and GPU-hours at most) and what the budget shows
-(`jup budget`, a day behind, in core-hours with how they convert). Above one node or
-one node-hour, and whenever the cost cannot be read
+(`jup budget`, a day behind). Above one node or one node-hour, and whenever the cost
+cannot be read
 for certain, Claude Code asks them to confirm; the question should not be the first
 they hear of it.
 

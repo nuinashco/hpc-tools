@@ -330,3 +330,89 @@ def test_a_long_note_gives_a_title_cut_at_a_words_end(transcript):
     title = text.splitlines()[0]
     assert title.endswith("how much of the ...") and len(title) < 105
     assert note in text
+
+
+def test_a_digest_is_kept_beside_its_report_and_can_be_sent(transcript):
+    built, _ = build(transcript)
+    redact = feedback.Redactor.for_user(login="alice1", account="proj-1234")
+
+    digest = feedback.write_digest(
+        built.path,
+        "# jupiter feedback: wrong price\n\nalice1 ran it on proj-1234",
+        redact,
+    )
+
+    assert digest.parent == built.path.parent and digest.name.endswith(".digest.md")
+    assert digest.read_text() == (
+        "# jupiter feedback: wrong price\n\n<login> ran it on <account>\n"
+    )
+    assert feedback.check_report(digest) == digest.resolve()
+
+
+def test_a_digest_without_a_heading_gets_the_one_an_issue_needs(transcript):
+    built, _ = build(transcript)
+    redact = feedback.Redactor.for_user(login="", account=None)
+
+    digest = feedback.write_digest(built.path, "it priced the job wrong", redact)
+
+    assert digest.read_text().startswith("# jupiter feedback\n\nit priced")
+
+
+@pytest.mark.parametrize(
+    ("text", "message"),
+    [("  \n", "empty"), ("x" * (feedback.MAX_DIGEST + 1), "shorten it")],
+)
+def test_a_digest_the_user_cannot_read_whole_is_refused(transcript, text, message):
+    built, _ = build(transcript)
+    redact = feedback.Redactor.for_user(login="", account=None)
+
+    with pytest.raises(UserError, match=message):
+        feedback.write_digest(built.path, text, redact)
+
+    assert not feedback.find_digest(built.path).exists()
+
+
+@pytest.mark.parametrize(
+    ("code", "printed", "word", "readers"),
+    [
+        (0, "PUBLIC\n", "public", "anyone can read"),
+        (0, "PRIVATE\n", "private", "its members can read"),
+        (1, "", "", "readable by anyone"),
+        (0, "something else\n", "", "readable by anyone"),
+    ],
+)
+def test_who_can_read_an_issue_is_told_from_the_repositorys_visibility(
+    code, printed, word, readers
+):
+    def gh(command, **options):
+        assert command[:4] == ["gh", "repo", "view", "o/r"]
+        return subprocess.CompletedProcess(command, code, printed, "")
+
+    assert feedback.read_visibility("o/r", run=gh) == word
+    assert readers in feedback.describe_readers("o/r", word)
+
+
+def test_without_gh_who_can_read_an_issue_is_unknown():
+    def gh(command, **options):
+        raise FileNotFoundError("gh")
+
+    assert feedback.read_visibility("o/r", run=gh) == ""
+
+
+def test_what_the_check_asked_about_stays_in_a_long_log():
+    passed = {"kind": "check", "decision": "pass", "command": "ls\n" + "x" * 5_000}
+    asked = {
+        "kind": "check",
+        "decision": "ask",
+        "reason": "it may submit",
+        "command": "python3 - <<EOF\nprint('sbatch')\nEOF",
+    }
+    failed = {"kind": "run", "name": "push", "args": [], "exit": 66, "seconds": 0.1}
+    records = [asked, failed, *([passed] * 400), {**passed, "command": "pwd"}]
+
+    text = feedback.render_log(records, limit=3_000)
+
+    assert "asked the user: it may submit | python3 - <<EOF print('sbatch') EOF" in text
+    assert "jup push  -> exit 66" in text
+    assert text.endswith("cost check passed | pwd") and len(text) < 3_200
+    assert "earlier records of what worked are left out" in text.splitlines()[0]
