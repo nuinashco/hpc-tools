@@ -334,6 +334,26 @@ def parse_options(
     return options, list(arguments[index:])
 
 
+def describe_submission(line: str) -> str:
+    """Return what a job runs, from accounting's record of the line that submitted it.
+
+    The script with its arguments, or the wrapped command. Slurm joins the words of
+    the line with spaces and quotes none, so the answer is for reading, not running:
+    an option's value that held a space leaves its tail in front of the script.
+    """
+    words = line.split()
+    if not words or words[0].rpartition("/")[2] != "sbatch":
+        return " ".join(words)
+    for index, word in enumerate(words):
+        if word == "--wrap" or word.startswith("--wrap="):
+            command = [word.partition("=")[2], *words[index + 1 :]]
+            return f"--wrap {' '.join(command).strip()}"
+    _, rest = parse_options(words[1:])
+    if not rest:
+        return " ".join(words[1:])
+    return " ".join([rest[0].rpartition("/")[2], *rest[1:]])
+
+
 def read_directives(script: str) -> dict[str, str]:
     """Return the options a batch script sets in its `#SBATCH` lines.
 

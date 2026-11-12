@@ -88,7 +88,7 @@ test: the fewest inputs that exercise every stage, a time limit of minutes, on t
 test reservation.
 
 ```bash
-jup submit --reservation=develbooster --time=00:15:00 job.sbatch SMALL-ARGS
+jup submit --reservation=develbooster --time=00:15:00 --job-name=NAME-test job.sbatch SMALL-ARGS
 ```
 
 Then follow it as in step 8. The reservation allows 4 nodes and 4 jobs per user, and
@@ -98,7 +98,33 @@ drained: cancel it and submit the same test without `--reservation`.
 Read the test's output to the end before going on. A test that passed stage one and
 was cut by its time limit has not tested stage two.
 
-## 7. Say the cost, then submit
+## 7. Name the run, say the cost, then submit
+
+The job's name is what the user reads in the queue, and it should tell them what the
+run is about without opening anything. A script's own `--job-name` is the same for
+every run of it, so pass `--job-name=` with each submission, built from what you know
+of the experiment:
+
+```
+PROJECT-METHOD-VARIANT        swe-grpo-sync    swe-grpo-async    swe-agent6-val
+```
+
+- METHOD is what is being tried, in the user's own word for it: the algorithm, the
+  version of the model or agent, the benchmark. Take it from the conversation and
+  from the config, never from the script's file name: `train`, `run` or `job` tells
+  the user nothing they asked about.
+- VARIANT is what is special about this run among the runs it will be compared with:
+  the setting that differs, or the data it runs on. Runs that belong to one
+  comparison differ only in this part.
+- A test of step 6 ends in `-test`. A repeat of a run keeps its name.
+- Lowercase letters, digits and hyphens, short enough to read in a table (about 30
+  characters).
+
+When you cannot say what the method is, ask the user what they call this experiment;
+do not fall back on the script's name. Say the name in the sentence about the cost,
+so that the user can correct it before anything runs. `jup submit` prints a note when
+a run would share its name with every other run of the script, and `jup jobs` shows
+beside each name the script and arguments the job was submitted with.
 
 Tell the user in one sentence what the real run reserves and costs (`jup cost` prints
 it: nodes, time limit, node-hours and GPU-hours at most) and what the budget shows
@@ -108,7 +134,7 @@ for certain, Claude Code asks them to confirm; the question should not be the fi
 they hear of it.
 
 ```bash
-jup submit job.sbatch ARGS
+jup submit --job-name=NAME job.sbatch ARGS
 ```
 
 Options before the script go to `sbatch` (`--time=`, `--nodes=`, `--job-name=`,

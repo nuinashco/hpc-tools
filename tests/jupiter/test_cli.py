@@ -166,6 +166,102 @@ def test_a_test_flag_after_the_script_belongs_to_the_script(context, script, run
     assert run.ran("sbatch --parsable")[0].count("job.sbatch --dry-run") == 1
 
 
+def test_a_run_that_keeps_its_scripts_name_gets_a_note(context, script, capsys):
+    cli.run_submit(["--dry-run", script, "configs/sync.yaml"], context)
+
+    printed = capsys.readouterr().out
+    assert "note: this job is named job.sbatch, like every run of job.sbatch" in printed
+    assert "pass --job-name=" in printed
+
+
+@pytest.mark.parametrize(
+    "arguments",
+    [["--job-name=swe-grpo-sync", "job.sbatch", "x"], ["job.sbatch"]],
+    ids=["named at submission", "a script without arguments"],
+)
+def test_no_note_for_a_named_run_or_a_script_that_always_runs_the_same(
+    context, script, capsys, arguments
+):
+    cli.run_submit(["--dry-run", *arguments], context)
+
+    assert "note:" not in capsys.readouterr().out
+
+
+def test_a_wrapped_command_without_a_name_is_told_slurms_name(context, capsys):
+    cli.run_submit(["--dry-run", "-N", "1", "-t", "5", "--wrap", "hostname"], context)
+
+    assert "Slurm names this job `wrap`" in capsys.readouterr().out
+
+
+def test_the_submission_reports_the_name_the_job_carries(context, script, run, capsys):
+    run.reply("cat -- job.sbatch", out=marked(SCRIPT))
+    run.reply("sbatch --parsable", out=marked("9"))
+
+    cli.run_submit(["-J", "swe-grpo-sync", script, "x"], context)
+
+    assert "submitted job 9, named swe-grpo-sync" in capsys.readouterr().out
+
+
+def test_the_job_list_says_what_each_job_runs_and_cuts_no_name(context, run, capsys):
+    sbatch = "sbatch --parsable --account=proj --partition=booster"
+    long_name = "swe-grpo-sync-with-a-name-longer-than-thirty"
+    run.reply(
+        "squeue --me",
+        out=marked(
+            f"12|booster|{long_name}|RUNNING|5:00|40:00|1|node-01\n"
+            "13_[2-4]|booster|sweep|PENDING|0:00|10:00|1|(Priority)\n"
+            "--\n"
+            f"11|swe-eval|booster|CANCELLED by 1000|00:02:00|00:10:00|1|0:0|"
+            f"2026-01-02T03:04:05|{sbatch} --wrap python -c 'a | b'\n"
+            f"12|{long_name}|booster|RUNNING|00:05:00|00:40:00|1|0:0|Unknown|"
+            f"{sbatch} --time=00:40:00 scripts/train.sbatch configs/sync.yaml\n"
+            f"13_[2-4]|sweep|booster|PENDING|00:00:00|00:10:00|1|0:0|Unknown|"
+            f"{sbatch} --array=1-4 sweep.sbatch\n"
+        ),
+    )
+
+    assert cli.run_jobs(["--days", "3"], context) == 0
+
+    queue, _, history = capsys.readouterr().out.partition("ended in the last 3 days:")
+    running, pending = queue.splitlines()[2:4]
+    assert running.split()[2] == long_name
+    assert running.split()[-3:] == ["node-01", "train.sbatch", "configs/sync.yaml"]
+    assert pending.split()[-2:] == ["(Priority)", "sweep.sbatch"]
+    [ended] = history.splitlines()[2:]
+    assert ended.split()[:5] == ["11", "swe-eval", "booster", "CANCELLED", "00:02:00"]
+    assert ended.endswith("--wrap python -c 'a | b'")
+
+
+def test_a_long_command_is_cut_in_the_job_list(context, run, capsys):
+    words = " ".join(f"task_{number:03}" for number in range(40))
+    run.reply(
+        "squeue --me",
+        out=marked(
+            f"--\n7|record|booster|COMPLETED|00:01:00|00:10:00|1|0:0|"
+            f"2026-01-02T03:04:05|sbatch record.sbatch {words}\n"
+        ),
+    )
+
+    cli.run_jobs([], context)
+
+    printed = capsys.readouterr().out
+    assert "queued and running:\n  none" in printed
+    assert printed.rstrip().endswith("task_008 task_ ...")
+
+
+def test_the_queue_is_listed_also_when_accounting_does_not_answer(context, run, capsys):
+    run.reply(
+        "squeue --me",
+        out=marked("12|booster|swe-grpo-sync|RUNNING|5:00|40:00|1|node-01\n--\n!\n"),
+    )
+
+    assert cli.run_jobs([], context) == 0
+
+    printed = capsys.readouterr().out
+    assert "swe-grpo-sync  RUNNING" in printed
+    assert "accounting (sacct) gave no answer" in printed
+
+
 def test_waiting_inside_sbatch_is_refused(context, script):
     with pytest.raises(UserError, match="jup wait"):
         cli.run_submit(["--wait", script], context)
