@@ -163,7 +163,9 @@ them. So the plugin measures:
 - **`jup wait JOB`** reads each GPU's load once a minute after the job has run for `gpu_warmup` (10 minutes: a
   model takes minutes to load). When a GPU stayed below 5% for `gpu_idle_minutes` (5) in a row, the command
   stops with exit code 69 and says which GPUs sit idle, what the job has cost and what it will cost at most.
-  It cancels nothing: Claude tells you, and you choose between `jup cancel JOB` and `jup wait JOB --idle-ok`.
+  It cancels nothing: Claude asks you, in a question that holds those numbers, whether to cancel the job or
+  keep it, and runs the command for your answer. In your own terminal the report names the two commands,
+  `jup cancel JOB` and `jup wait JOB --idle-ok`.
   A job that ends within those 15 minutes, as a test does, is not judged.
 - **The result is kept** for each batch script, in `~/.local/state/hpc-tools/jupiter/gpu-load.json`. When the
   cost check asks about a later submission of that script, its question says what the last measured job did:

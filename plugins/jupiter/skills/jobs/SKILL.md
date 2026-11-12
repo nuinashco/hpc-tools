@@ -40,10 +40,25 @@ every state change as it happens, run `jup wait JOB` under the Monitor tool inst
 **Exit code 69 means the job runs with idle GPUs.** After the job's warm-up (10
 minutes) `jup wait` reads each GPU once a minute, and when one stayed idle for 5
 minutes it stops and prints which, what the job has cost and what it will cost at
-most. The job goes on and nothing is cancelled. Tell the user at once, with those
-numbers, and let them choose: `jup cancel JOB`, or `jup wait JOB --idle-ok` to go on
-waiting. Do not choose for them, and do not go on waiting without asking. When a job
-ends, `jup wait` prints each GPU's mean load: report it with the result.
+most. The job goes on and nothing is cancelled. Whether it goes on is the user's
+decision, because the budget is shared: do not choose for them, and do not go on
+waiting without asking.
+
+Ask at once, since the job pays for its idle GPUs while you look into the cause. Ask
+with the AskUserQuestion tool when you have it, so that the user picks an answer and
+types no command. They may see the question and nothing else, so put the numbers
+into it: the job, how many of its GPUs are idle, the cost so far and the cost at
+most. Give two answers, and run the command of the one they pick:
+
+- cancel the job: `jup cancel JOB`
+- keep it and go on waiting: `jup wait JOB --idle-ok`, in the background as before
+
+Mark one as recommended only when you know why the GPUs are idle: cancelling when
+the script cannot load them, keeping when the job is in a stage that needs none.
+Without that tool (a run with nobody at the keyboard, a subagent), end your turn
+with the numbers and the two choices in your message instead.
+
+When a job ends, `jup wait` prints each GPU's mean load: report it with the result.
 `jup gpus JOB` shows the GPUs of a running job at any moment.
 
 `jup wait` looks once a minute, which is as often as a shared login node should be

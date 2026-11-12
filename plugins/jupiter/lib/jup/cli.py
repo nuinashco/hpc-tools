@@ -29,6 +29,7 @@ from __future__ import annotations
 import argparse
 import contextlib
 import json
+import os
 import re
 import shlex
 import shutil
@@ -607,7 +608,13 @@ def read_seconds(text: str) -> int:
 
 
 def report_idle(
-    watch: gpus.Watch, job: str, nodes: int, spent: int, limit: int, config: Config
+    watch: gpus.Watch,
+    job: str,
+    nodes: int,
+    spent: int,
+    limit: int,
+    config: Config,
+    env: Mapping[str, str] = os.environ,
 ) -> None:
     """Print that a job's GPUs sit idle, what that costs, and what can be done."""
     idle, total = len(watch.idle()), len(watch.means())
@@ -621,10 +628,19 @@ def report_idle(
     )
     for line in watch.describe():
         print(f"  {line}", flush=True)
+    # Claude Code sets CLAUDECODE in the shells it starts: there Claude reads this
+    # report and the person does not, so the choice reaches them as a question.
+    if env.get("CLAUDECODE"):
+        choice = (
+            "what happens next is the user's choice\n"
+            "  Claude: ask the user now, in a question that holds the numbers above "
+            "and these two\n  answers, and run the one they pick:"
+        )
+    else:
+        choice = "to choose what happens next, run one of:"
     print(
         f"  it pays for all of them: {so_far} so far, {at_most} if it runs to its "
-        "limit\n  the job still runs and nothing was cancelled; what happens next "
-        "is the user's choice:\n"
+        f"limit\n  the job still runs and nothing was cancelled; {choice}\n"
         f"    jup cancel {job}            stops the job\n"
         f"    jup wait {job} --idle-ok    keeps it and goes on waiting",
         flush=True,

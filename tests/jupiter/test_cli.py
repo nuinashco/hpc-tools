@@ -580,8 +580,9 @@ def test_waiting_stops_when_gpus_the_job_pays_for_sit_idle(context, run, capsys)
     assert "job 7: 3 of its 4 GPUs idle in each of the last 5 readings" in printed
     assert "n1: GPU 0 96%, GPU 1 0%, GPU 2 0%, GPU 3 0%" in printed
     assert "0.23 node-hours (0.93 GPU-hours) so far, 12 node-hours" in printed
-    assert "nothing was cancelled; what happens next is the user's choice" in printed
+    assert "nothing was cancelled; to choose what happens next, run one of" in printed
     assert "jup cancel 7 " in printed and "jup wait 7 --idle-ok " in printed
+    assert "Claude" not in printed
     assert recall_loaded("repo/job.sbatch") == 1
     assert len(run.ran("srun --jobid=7")) == 5
 
@@ -613,6 +614,20 @@ def test_idle_gpus_the_user_accepted_do_not_stop_the_wait(context, run, capsys):
 
     assert watch(context, "--idle-ok") == 0
     assert "(mean load over 8 readings)" in capsys.readouterr().out
+
+
+def test_in_a_claude_code_session_the_idle_report_has_claude_ask_the_user(
+    context, capsys
+):
+    watched = gpus.Watch.of(2, 60)
+    for _ in range(2):
+        watched.add(gpus.parse_readings(["n1, 0, 96, 0", "n1, 1, 0, 0"]))
+
+    cli.report_idle(watched, "7", 1, 600, 3600, context.config, {"CLAUDECODE": "1"})
+
+    printed = capsys.readouterr().out
+    assert "is the user's choice\n  Claude: ask the user now, in a question" in printed
+    assert "jup cancel 7 " in printed and "jup wait 7 --idle-ok " in printed
 
 
 def test_a_running_jobs_gpus_can_be_read_at_any_time(context, run, capsys):

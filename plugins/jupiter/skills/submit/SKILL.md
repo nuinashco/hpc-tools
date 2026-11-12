@@ -123,7 +123,8 @@ jup wait JOB                    # in the background again: ends with the job, ex
 ```
 
 `jup wait` also ends, with exit code 69, when GPUs of the job sit idle after its
-warm-up: the `jobs` skill says what to do then. `jup submit` and the cost check's
+warm-up: ask the user then whether to cancel the job or keep it, the way the `jobs`
+skill describes, and decide nothing yourself. `jup submit` and the cost check's
 question say what the script's last measured job did with its GPUs; when none was
 measured, the test of step 6 is where to find out, if it runs past the warm-up.
 
