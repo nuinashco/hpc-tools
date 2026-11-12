@@ -177,6 +177,13 @@ def clip(text: str, limit: int) -> str:
     return f"{text[:head]}\n[... {cut} characters cut ...]\n{text[-tail:]}"
 
 
+def shorten(line: str, limit: int = 80) -> str:
+    """Return a line cut at a word's end, for an issue's title."""
+    if len(line) <= limit:
+        return line
+    return line[:limit].rpartition(" ")[0].rstrip(",;:") + " ..."
+
+
 def read_records(path: Path) -> list[dict[str, Any]]:
     """Return the messages of a transcript, without Claude Code's own bookkeeping."""
     try:
@@ -435,7 +442,7 @@ def build(
     listed = ", ".join(f"{key}={value}" for key, value in settings.items())
     header = "\n".join(
         [
-            f"# {PLUGIN} feedback: {said.splitlines()[0][:80]}",
+            f"# {PLUGIN} feedback: {shorten(said.splitlines()[0])}",
             "",
             f"- plugin: {PLUGIN} {version}",
             f"- Claude Code: {', '.join(sorted(facts['versions'])) or 'unknown'}",
@@ -502,7 +509,9 @@ def send(
     if done.returncode:
         detail = (done.stderr or "").strip().splitlines()[-1:] or ["no message"]
         raise RemoteError(
-            f"gh could not file the issue on {repository} ({detail[0]}); log in with "
-            f"`gh auth login`, or attach {path} to an issue there by hand"
+            f"gh could not file the issue on {repository} ({detail[0]}); the GitHub "
+            "account that `gh` uses must be logged in and have access to that "
+            "repository (`gh auth status` shows it, `gh auth switch` changes it), or "
+            f"attach {path} to an issue there by hand"
         )
     return done.stdout.strip().splitlines()[-1] if done.stdout.strip() else repository

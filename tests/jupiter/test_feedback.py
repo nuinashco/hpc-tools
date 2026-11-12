@@ -313,7 +313,20 @@ def test_a_failed_send_says_what_to_do_and_keeps_the_report(transcript):
     def gh(command, **options):
         return subprocess.CompletedProcess(command, 1, "", "error: not logged in\n")
 
-    with pytest.raises(RemoteError, match="gh auth login"):
+    with pytest.raises(RemoteError, match="gh auth switch"):
         feedback.send(built.path, "o/r", run=gh)
 
     assert built.path.exists()
+
+
+def test_a_long_note_gives_a_title_cut_at_a_words_end(transcript):
+    note = (
+        "the cost came without the budget and I expected it to say how much of the "
+        "account is left"
+    )
+
+    _, text = build(transcript, note=note)
+
+    title = text.splitlines()[0]
+    assert title.endswith("how much of the ...") and len(title) < 105
+    assert note in text
