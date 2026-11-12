@@ -106,7 +106,28 @@ def test_command_options_win_over_the_scripts():
     asked = request({"nodes": "1-3", "time": "2:00:00"}, {"nodes": "8", "array": "0-1"})
 
     assert (asked.nodes, asked.seconds, asked.tasks, asked.doubts) == (3, 7200, 2, ())
-    assert asked.core_hours(288) == 2 * 3 * 288 * 2
+    assert asked.node_hours() == 2 * 3 * 2
+
+
+@pytest.mark.parametrize(
+    ("time", "gpus", "cost"),
+    [
+        ("12:00:00", 4, "at most 12 node-hours (48 GPU-hours)"),
+        ("40", 4, "at most 0.67 node-hours (2.67 GPU-hours)"),
+        ("15", 4, "at most 0.25 node-hours (1 GPU-hour)"),
+        ("1:00:00", 0, "at most 1 node-hour"),
+    ],
+)
+def test_a_cost_is_told_in_node_hours_and_in_gpu_hours_where_nodes_have_gpus(
+    time, gpus, cost
+):
+    assert request({"nodes": "1", "time": time}).describe(gpus).endswith(cost)
+
+
+def test_a_large_cost_is_told_in_whole_hours():
+    asked = request({"nodes": "100", "time": "12:00:00", "array": "0-1"})
+
+    assert asked.describe(4).endswith("at most 2,400 node-hours (9,600 GPU-hours)")
 
 
 @pytest.mark.parametrize(
@@ -125,7 +146,7 @@ def test_what_a_request_leaves_open_is_named(options, doubt):
     asked = request(options)
 
     assert any(doubt in text for text in asked.doubts)
-    assert "not certain" in asked.describe(288)
+    assert "not certain" in asked.describe(4)
 
 
 def test_no_limit_is_priced_at_the_partitions_longest_job():

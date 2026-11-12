@@ -5,7 +5,7 @@ description: Submits a Slurm job to JSC's JUPITER supercomputer without wasting 
 
 # Submitting a job to JUPITER
 
-A job spends core-hours the user shares with their project from the second it starts,
+A job spends node-hours the user shares with their project from the second it starts,
 and nothing comes back when it fails. So the work here is mostly before `sbatch`: make
 the cheap checks first, then spend. If you have not read the `cluster` skill in this
 session, read it now; the options and limits are in
@@ -91,8 +91,9 @@ was cut by its time limit has not tested stage two.
 ## 7. Say the cost, then submit
 
 Tell the user in one sentence what the real run reserves and costs (`jup cost` prints
-it: nodes, time limit, core-hours at most) and what the budget shows (`jup budget`,
-a day behind). Above one node or 300 core-hours, and whenever the cost cannot be read
+it: nodes, time limit, node-hours and GPU-hours at most) and what the budget shows
+(`jup budget`, a day behind, in core-hours with how they convert). Above one node or
+one node-hour, and whenever the cost cannot be read
 for certain, Claude Code asks them to confirm; the question should not be the first
 they hear of it.
 

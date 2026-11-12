@@ -17,6 +17,8 @@ PROJECT_FILE = ".jupiter.json"
 # A node of the booster partition is billed whole, at its 288 cores, whatever runs on it
 # (`sacct` of job 2800157, 2026-11-09; JSC's accounting page).
 BOOSTER_CORES = 288
+# Each has four GH200 GPUs, which a job gets with the node whether it uses them or not.
+BOOSTER_GPUS = 4
 
 DEFAULTS: dict[str, Any] = {
     "host": "hpc-jupiter",
@@ -24,13 +26,15 @@ DEFAULTS: dict[str, Any] = {
     "partition": "booster",
     "remote_dir": "/e/project1/{account}/{user}/{project}",
     "sync_exclude": [],
+    # What the budget counts for a node-hour: `jutil` reports in core-hours.
     "cores_per_node": BOOSTER_CORES,
+    "gpus_per_node": BOOSTER_GPUS,
     # What the booster partition gives a job without --time, and at most (JSC's batch
     # page, 2026-11-12).
     "default_time": "01:00:00",
     "max_time": "12:00:00",
     "ask_above_nodes": 1,
-    "ask_above_core_hours": 300,
+    "ask_above_node_hours": 1,
     # Whether the helper keeps its local log of runs, which `jup feedback` reads.
     "log": True,
     # Where `jup feedback --send` files its report: this plugin's own repository.
@@ -39,12 +43,20 @@ DEFAULTS: dict[str, Any] = {
 # Settings a repository's file may not set: the ssh alias is each person's own, and the
 # rest decide what the cost check sees.
 PERSONAL = frozenset(
-    {"host", "cores_per_node", "default_time", "max_time", "log", "feedback_repo"}
+    {
+        "host",
+        "cores_per_node",
+        "gpus_per_node",
+        "default_time",
+        "max_time",
+        "log",
+        "feedback_repo",
+    }
 )
 # Limits of the cost check: a repository's file may lower them, never raise them.
-LIMITS = frozenset({"ask_above_nodes", "ask_above_core_hours"})
+LIMITS = frozenset({"ask_above_nodes", "ask_above_node_hours"})
 _LISTS = frozenset({"sync_exclude"})
-_NUMBERS = frozenset({"cores_per_node", *LIMITS})
+_NUMBERS = frozenset({"cores_per_node", "gpus_per_node", *LIMITS})
 _TIMES = frozenset({"default_time", "max_time"})
 _SWITCHES = frozenset({"log"})
 _YES = frozenset({"true", "yes", "on", "1"})
@@ -183,10 +195,11 @@ class Config:
     remote_dir: str
     sync_exclude: tuple[str, ...]
     cores_per_node: int
+    gpus_per_node: int
     default_time: str
     max_time: str
     ask_above_nodes: float
-    ask_above_core_hours: float
+    ask_above_node_hours: float
     log: bool
     feedback_repo: str
     # Where `push` copies from and what {project} names.
@@ -223,10 +236,11 @@ class Config:
             remote_dir=values["remote_dir"],
             sync_exclude=tuple(values["sync_exclude"]),
             cores_per_node=int(values["cores_per_node"]),
+            gpus_per_node=int(values["gpus_per_node"]),
             default_time=values["default_time"],
             max_time=values["max_time"],
             ask_above_nodes=values["ask_above_nodes"],
-            ask_above_core_hours=values["ask_above_core_hours"],
+            ask_above_node_hours=values["ask_above_node_hours"],
             log=values["log"],
             feedback_repo=values["feedback_repo"],
             root=root,

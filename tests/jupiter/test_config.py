@@ -35,9 +35,11 @@ def test_the_projects_file_wins_over_the_persons_and_a_variable_over_both(
     assert loaded.sources["partition"] == "$JUP_PARTITION"
 
 
-@pytest.mark.parametrize("key", ["host", "cores_per_node", "default_time", "max_time"])
+@pytest.mark.parametrize(
+    "key", ["host", "cores_per_node", "gpus_per_node", "default_time", "max_time"]
+)
 def test_a_repository_cannot_set_what_is_each_persons_own(project, key):
-    value = {"host": "evil-host"}.get(key, 1 if key == "cores_per_node" else "00:01:00")
+    value = {"host": "evil-host"}.get(key, 1 if "per_node" in key else "00:01:00")
     (project / ".jupiter.json").write_text(json.dumps({key: value}))
 
     with pytest.raises(ConfigError, match="each person's own"):
@@ -45,12 +47,12 @@ def test_a_repository_cannot_set_what_is_each_persons_own(project, key):
 
 
 def test_a_repository_may_lower_the_cost_checks_limits_and_never_raise_them(project):
-    limits = {"ask_above_nodes": 1000, "ask_above_core_hours": 50}
+    limits = {"ask_above_nodes": 1000, "ask_above_node_hours": 0.5}
     (project / ".jupiter.json").write_text(json.dumps(limits))
 
     loaded = Config.load(project)
 
-    assert (loaded.ask_above_nodes, loaded.ask_above_core_hours) == (1, 50)
+    assert (loaded.ask_above_nodes, loaded.ask_above_node_hours) == (1, 0.5)
 
 
 @pytest.mark.parametrize(
@@ -65,7 +67,8 @@ def test_a_repository_may_lower_the_cost_checks_limits_and_never_raise_them(proj
         ("remote_dir", "relative/path", "may hold only"),
         ("sync_exclude", 7, "list of patterns"),
         ("ask_above_nodes", True, "number of 0 or more"),
-        ("ask_above_core_hours", -1, "number of 0 or more"),
+        ("ask_above_node_hours", -1, "number of 0 or more"),
+        ("ask_above_core_hours", 300, "unknown setting"),
         ("default_time", "soon", "time limit"),
     ],
 )
@@ -113,12 +116,12 @@ def test_setting_a_value_keeps_the_others(tmp_path):
 
     config.write(path, "account", "proj")
     config.write(path, "sync_exclude", "reports/, *.ipynb")
-    config.write(path, "ask_above_core_hours", "1000")
+    config.write(path, "ask_above_node_hours", "2.5")
 
     assert json.loads(path.read_text()) == {
         "account": "proj",
         "sync_exclude": ["reports/", "*.ipynb"],
-        "ask_above_core_hours": 1000,
+        "ask_above_node_hours": 2.5,
     }
 
 

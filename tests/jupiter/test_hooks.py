@@ -33,7 +33,7 @@ def script(project):
 def test_a_submission_above_the_limits_asks_with_its_cost(project, script):
     text = reason(decide(f"jup submit -N 2 -t 6:00:00 {script}", project))
 
-    assert "2 nodes for up to 6:00:00: at most 3,456 core-hours" in text
+    assert "2 nodes for up to 6:00:00: at most 12 node-hours (48 GPU-hours)" in text
     assert "not certain" not in text
 
 
@@ -94,7 +94,7 @@ def test_a_test_flag_counts_only_where_sbatch_reads_it(project, script):
     assert decide(f"jup submit --test-only -N 64 -t 12:00:00 {script}", project) is None
     assert decide(f"jup submit --dry-run -N 64 -t 12:00:00 {script}", project) is None
 
-    assert "18,432" in reason(
+    assert "64 node-hours" in reason(
         decide(f"jup submit -N 64 -t 1:00:00 {script} --test-only", project)
     )
 
@@ -103,7 +103,7 @@ def test_submissions_in_one_command_are_added_up(project, script):
     one = f"jup submit -N 1 -t 40 {script}"
 
     assert decide(one, project) is None
-    assert "In all at most 576 core-hours" in reason(
+    assert "In all at most 2 node-hours (8 GPU-hours)" in reason(
         decide(f"{one}; {one}; {one}", project)
     )
 
@@ -129,7 +129,7 @@ def test_a_submission_to_another_system_is_not_this_checks_business(project, scr
 
 def test_a_repositorys_file_cannot_switch_the_question_off(project, script):
     (project / ".jupiter.json").write_text(
-        '{"account": "proj", "ask_above_nodes": 100000, "ask_above_core_hours": 1e12}'
+        '{"account": "proj", "ask_above_nodes": 100000, "ask_above_node_hours": 1e12}'
     )
 
     assert decide(f"jup submit -N 64 -t 12:00:00 {script}", project) is not None

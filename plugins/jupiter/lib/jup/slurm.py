@@ -17,8 +17,9 @@ SUBMITTERS = ("sbatch", "salloc", "srun")
 GUARD_SETTINGS = frozenset(
     {
         "ask_above_nodes",
-        "ask_above_core_hours",
+        "ask_above_node_hours",
         "cores_per_node",
+        "gpus_per_node",
         "default_time",
         "max_time",
     }
@@ -214,6 +215,27 @@ def format_time(seconds: int) -> str:
     return f"{hours}:{minutes:02d}:{rest:02d}"
 
 
+def format_hours(hours: float) -> str:
+    """Return a number of hours with the decimals its size needs: 0.67, 2.7, 48."""
+    if hours >= 100:
+        return f"{hours:,.0f}"
+    text = f"{hours:.1f}" if hours >= 10 else f"{hours:.2f}"
+    return text.rstrip("0").rstrip(".")
+
+
+def _count(hours: float, unit: str) -> str:
+    amount = format_hours(hours)
+    return f"{amount} {unit}{'' if amount == '1' else 's'}"
+
+
+def describe_cost(node_hours: float, gpus_per_node: int) -> str:
+    """Return a cost in node-hours, and in GPU-hours where the nodes have GPUs."""
+    text = _count(node_hours, "node-hour")
+    if gpus_per_node:
+        text += f" ({_count(node_hours * gpus_per_node, 'GPU-hour')})"
+    return text
+
+
 def resolve(name: str, kind: str) -> str:
     """Return the long option a name or its unique abbreviation stands for."""
     known = _FLAGS[kind] | _VALUED
@@ -385,17 +407,17 @@ class Request:
         tasks = count_array_tasks(merged["array"]) if "array" in merged else 1
         return cls(nodes, parse_time(limit), tasks, tuple(doubts))
 
-    def core_hours(self, cores_per_node: int) -> float:
-        """Return the most core-hours the request can be billed."""
-        return self.tasks * self.nodes * cores_per_node * self.seconds / 3600
+    def node_hours(self) -> float:
+        """Return the most node-hours the request can be billed: nodes go whole."""
+        return self.tasks * self.nodes * self.seconds / 3600
 
-    def describe(self, cores_per_node: int, more: Sequence[str] = ()) -> str:
+    def describe(self, gpus_per_node: int, more: Sequence[str] = ()) -> str:
         """Return the request and its cost in words, with what makes them unsure."""
         jobs = f"{self.tasks} jobs of " if self.tasks > 1 else ""
         nodes = f"{self.nodes} node{'s' if self.nodes != 1 else ''}"
         text = (
             f"{jobs}{nodes} for up to {format_time(self.seconds)}: at most "
-            f"{self.core_hours(cores_per_node):,.0f} core-hours"
+            f"{describe_cost(self.node_hours(), gpus_per_node)}"
         )
         doubts = [*self.doubts, *more]
         return f"{text} (not certain: {'; '.join(doubts)})" if doubts else text
