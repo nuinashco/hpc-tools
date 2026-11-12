@@ -112,6 +112,33 @@ def test_a_dry_run_changes_nothing_on_the_cluster(repository, run):
     assert "--dry-run" in run.ran("rsync")[0]
 
 
+def test_differing_files_are_what_a_dry_run_would_copy_without_directories(
+    repository, run
+):
+    run.reply(
+        "rsync",
+        out=".d..t......|notes/\ncd+++++++++|new/\n<f.st......|kept.py\n"
+        ">f+++++++|./notes/a.md\n.f...p.....|run.sh\ncL+++++++++|link\n"
+        "sent 10 bytes\n",
+    )
+
+    differing = sync.find_differing(
+        Remote("cluster", run=run), repository, "/e/p/repo", []
+    )
+
+    assert differing == ["kept.py", "notes/a.md", "run.sh", "link"]
+    [compare] = run.ran("rsync")
+    assert "--dry-run" in compare and "--files-from=-" in compare
+    assert run.ran("mkdir") == [] and run.ran(".synced_from") == []
+
+
+def test_the_home_directory_is_compared_with_nothing(run, monkeypatch, tmp_path):
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+
+    assert sync.find_differing(Remote("cluster", run=run), tmp_path, "/e/p/x", []) == []
+    assert run.ran("rsync") == []
+
+
 def test_a_directory_that_is_no_repository_is_not_copied_unasked(tmp_path, run):
     with pytest.raises(UserError, match="--all"):
         sync.push(Remote("cluster", run=run), tmp_path, "/e/p/x", [], dry_run=False)

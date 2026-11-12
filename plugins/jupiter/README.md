@@ -46,7 +46,7 @@ jup ssh [-C] COMMAND...         run a command on the login node (-C: in the proj
 jup push [--dry-run] [--all]    copy the project to the cluster
 jup pull PATTERN... [--to DIR] [--dry-run]
 jup cost SBATCH_ARGS...         what a submission would reserve and cost
-jup submit [--dry-run] SBATCH_ARGS...
+jup submit [--dry-run] [--stale-ok] SBATCH_ARGS...
 jup jobs [--days N]             queued, running and recent jobs
 jup wait JOB [--until-running]  print each state change until the job ends
 jup gpus JOB                    a running job's GPUs now: load and memory
@@ -72,7 +72,10 @@ It needs Python 3.9 or later (the one that comes with Apple's command line tools
   only with `--all`.
 - **`jup pull`** takes paths inside the project and replaces local files that differ; `--dry-run` lists first.
 - **`jup submit`** prices the copy of the script that is on the cluster and refuses when it asks for something
-  else than the copy here.
+  else than the copy here. It also refuses when any file here differs from the copy that `jup push` made, and
+  names the files: the job would run the cluster's copy. `--stale-ok` submits that copy as it is. The comparison
+  is the one of `jup push --dry-run` (size and time of each file, a few seconds); a directory on the cluster that
+  no push made is not compared.
 - **Exit codes** of `jup` itself are 64 and up (65 settings, 66 no connection, 68 a failure on the cluster,
   69 from `jup wait` for a job whose GPUs sit idle), and
   its messages start with `jup:`; `jup ssh` hands through the remote command's own code.

@@ -152,16 +152,40 @@ class Remote:
         )
         return classify(self.host, done.stderr or "") if done.returncode else None
 
-    def copy(self, arguments: Sequence[str], *, files: str | None = None) -> None:
-        """Run rsync over the shared connection with `arguments`."""
+    def copy(
+        self,
+        arguments: Sequence[str],
+        *,
+        files: str | None = None,
+        capture: bool = False,
+    ) -> str:
+        """Run rsync over the shared connection; return its output when captured.
+
+        Captured, it has `ANSWER_SECONDS`: that is for a comparison, not for a copy.
+        """
         self.need_connection()
         shell = " ".join(["ssh", *BATCH])
-        done = self.run(["rsync", "-e", shell, *arguments], input=files, text=True)
+        try:
+            done = self.run(
+                ["rsync", "-e", shell, *arguments],
+                input=files,
+                text=True,
+                errors="replace",
+                stdout=subprocess.PIPE if capture else None,
+                timeout=ANSWER_SECONDS if capture else None,
+            )
+        except subprocess.TimeoutExpired:
+            raise RemoteError(
+                f"rsync to {self.host} gave no answer within {ANSWER_SECONDS} s; the "
+                f"shared connection may hang: close it with `ssh -O exit {self.host}` "
+                "and have the user log in again"
+            ) from None
         if done.returncode:
             raise RemoteError(
                 f"rsync ended with code {done.returncode}; its messages above say "
                 "which files or directories it could not copy"
             )
+        return done.stdout or ""
 
 
 def classify(host: str, stderr: str) -> UserError:

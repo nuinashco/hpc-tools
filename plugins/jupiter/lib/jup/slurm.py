@@ -55,8 +55,9 @@ _SHARED_FLAGS = frozenset(
 _FLAGS = {
     "sbatch": _SHARED_FLAGS
     | {
-        # `--dry-run` is the helper's own, for `jup submit`.
+        # `--dry-run` and `--stale-ok` are the helper's own, for `jup submit`.
         "dry-run",
+        "stale-ok",
         "external",
         "get-user-env",
         "ignore-pbs",

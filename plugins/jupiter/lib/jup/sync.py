@@ -42,6 +42,10 @@ _PATTERN = re.compile(r"^[A-Za-z0-9._/*?\[\]@+=,-]+$")
 # Modes and times, and no owner or group: a new file takes the project's group from the
 # directory it lands in, as the cluster's project directories are set up to give.
 _FLAGS = ("-rlptD",)
+# What a dry run prints for each entry a copy would change: rsync's change flags, a
+# bar, the name. The second flag is the entry's kind, `d` for a directory.
+_ITEM_FORMAT = "%i|%n"
+_ITEM = re.compile(r"^[<>ch.][fLDS][^|]*\|(?:\./)?(.+)$")
 
 
 def is_excluded(path: str, patterns: Sequence[str]) -> bool:
@@ -151,6 +155,23 @@ def describe_source(root: Path) -> str:
     )
 
 
+def _is_project(root: Path) -> bool:
+    return root not in (Path.home(), Path(root.anchor))
+
+
+def _select(
+    root: Path, exclude: Sequence[str], tracked: bool
+) -> tuple[list[str], str | None, Listing | None]:
+    """Return rsync's arguments that choose the files, its input, and the listing."""
+    if not tracked:
+        skipped = [f"--exclude={name}" for name in (*_NEVER, *_SECRETS, *exclude)]
+        return skipped, None, None
+    listing = list_files(root, exclude)
+    # A name with `./` in front cannot be read as a comment or an option.
+    names = "".join(f"./{name}\n" for name in listing.files)
+    return ["--files-from=-"], names, listing
+
+
 def push(
     remote: Remote,
     root: Path,
@@ -165,7 +186,7 @@ def push(
     Files that differ there are replaced, and nothing there is ever removed. Outside a
     git repository nothing says which files are private, so that needs `everything`.
     """
-    if root in (Path.home(), Path(root.anchor)):
+    if not _is_project(root):
         raise UserError(
             f"the project would be {root} itself; run the command inside a project's "
             "directory"
@@ -177,22 +198,34 @@ def push(
             "private; run `git init` there, or pass --all to copy everything but "
             "caches and files whose names say they hold secrets"
         )
-    listing = list_files(root, exclude) if tracked else None
+    selection, names, listing = _select(root, exclude, tracked)
     flags = [*_FLAGS, *(["--dry-run", "-v"] if dry_run else [])]
     if not dry_run:
         remote.read(f"mkdir -p {shlex.quote(target)}")
     destination = f"{remote.host}:{target}/"
-    if listing is None:
-        skipped = [f"--exclude={name}" for name in (*_NEVER, *_SECRETS, *exclude)]
-        remote.copy([*flags, *skipped, f"{root}/", destination])
-    else:
-        # A name with `./` in front cannot be read as a comment or an option.
-        names = "".join(f"./{name}\n" for name in listing.files)
-        remote.copy([*flags, "--files-from=-", f"{root}/", destination], files=names)
+    remote.copy([*flags, *selection, f"{root}/", destination], files=names)
     if not dry_run:
         stamp = describe_source(root)
         remote.read(f"cat > {shlex.quote(target + '/' + STAMP)} <<'EOT'\n{stamp}EOT")
     return listing
+
+
+def find_differing(
+    remote: Remote, root: Path, target: str, exclude: Sequence[str]
+) -> list[str]:
+    """Return the project's files that a push would copy: new here, or other there.
+
+    Directories are left out: a push changes their times, never what a job reads.
+    """
+    if not _is_project(root):
+        return []
+    selection, names, _ = _select(root, exclude, is_work_tree(root))
+    flags = [*_FLAGS, "--dry-run", f"--out-format={_ITEM_FORMAT}"]
+    destination = f"{remote.host}:{target}/"
+    printed = remote.copy(
+        [*flags, *selection, f"{root}/", destination], files=names, capture=True
+    )
+    return [found[1] for line in printed.splitlines() if (found := _ITEM.match(line))]
 
 
 def check_pattern(pattern: str) -> str:
