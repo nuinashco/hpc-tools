@@ -51,6 +51,10 @@ group burns budget, the second wastes a day, the third confuses.
 - **Processes fighting over the same cores.** Sixteen processes each pinned their
   children starting from core 0, and 64 containers shared 26 of 288 cores. Give each
   process its own share (`taskset`) when one node runs several.
+- **A follower left on the login node.** `ssh HOST 'tail -F FILE'` was stopped on
+  the user's machine, and the `tail` and its shell went on running there, two of the
+  20 processes a user may have (tried on 2026-11-13). Started with a terminal
+  (`ssh -tt`), both ended with the local side. `jup logs JOB -f` follows that way.
 - **A time limit in the middle of the last step.** A job cut by its limit skipped the
   bookkeeping at the end of its script. Do that in an `EXIT` trap, keep it to seconds
   (Slurm kills shortly after its warning), and write results as they come.

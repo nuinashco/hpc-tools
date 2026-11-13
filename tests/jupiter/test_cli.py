@@ -4,7 +4,10 @@ from __future__ import annotations
 
 import io
 import json
+import os
 import shlex
+import signal
+import subprocess
 
 import pytest
 
@@ -443,6 +446,64 @@ def test_logs_are_read_from_the_files_slurm_names_whatever_their_names_hold(
         "/e/p/my out's.log",
     ]
     assert script.count("; ") == 1
+
+
+def test_followed_logs_come_from_one_tail_that_ends_with_the_local_side(context, run):
+    shown = "JobId=7 JobName=x\n   StdErr=/e/p/e.log\n   StdOut=/e/p/my out's.log\n"
+    run.reply("scontrol show job 7", out=shown)
+
+    cli.run_logs(["7", "-n", "5", "--follow"], context)
+
+    [call] = [c for c in run.calls if "tail -n 5" in c[-1]]
+    # Without a terminal the tail outlives a local side that stops.
+    assert "-tt" in call[: call.index("--")]
+    [_, _, script] = shlex.split(call[-1])
+    assert "tail -n 5 -F -- /e/p/e.log '/e/p/my out'\"'\"'s.log' &" in script
+    assert "squeue --noheader --jobs=7" in script
+
+
+def test_a_follow_ends_with_the_job_and_not_with_a_silent_scheduler(tmp_path):
+    answers = [
+        "slurm_load_jobs error: Socket timed out on send/recv operation",
+        "RUNNING",
+        "COMPLETED",
+    ]
+    (tmp_path / "answers").write_text("\n".join(answers) + "\n")
+    squeue = (
+        '#!/bin/sh\ncd "$(dirname "$0")"\necho x >> asked\n'
+        'sed -n "$(wc -l < asked | tr -d " ")p" answers\n'
+    )
+    for name, text in (("squeue", squeue), ("tail", "#!/bin/sh\nexec sleep 30\n")):
+        (tmp_path / name).write_text(text)
+        (tmp_path / name).chmod(0o755)
+    script = cli.follow_script("7", ["/e/p/out.log"], lines=5, poll=0)
+
+    done = subprocess.run(
+        ["bash", "-c", script],
+        env={"PATH": f"{tmp_path}{os.pathsep}{os.environ['PATH']}"},
+        timeout=20,
+        check=False,
+    )
+
+    assert done.returncode == 0
+    assert (tmp_path / "asked").read_text().count("x") == len(answers)
+
+
+def test_a_follow_that_is_told_to_end_stops_as_on_an_interrupt(context, run):
+    run.reply("scontrol show job 7", out="JobId=7\n   StdOut=/e/p/out.log\n")
+    # What `subprocess.run` answers by ending the ssh it started.
+    run.fail("tail -n 50 -F", KeyboardInterrupt())
+    before = signal.getsignal(signal.SIGTERM)
+
+    with pytest.raises(KeyboardInterrupt):
+        cli.run_logs(["7", "-f"], context)
+
+    assert signal.getsignal(signal.SIGTERM) is before
+
+
+def test_a_signal_to_end_reaches_a_follow_as_an_interrupt():
+    with pytest.raises(KeyboardInterrupt):
+        cli._interrupt(signal.SIGTERM, None)
 
 
 def test_a_job_slurm_has_forgotten_points_to_its_file(context, run):

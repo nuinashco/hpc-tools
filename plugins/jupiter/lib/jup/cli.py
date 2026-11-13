@@ -15,7 +15,8 @@ Usage:
                                     print each state change until the job ends, or
                                     until its GPUs sit idle (exit code 69)
     jup gpus JOB                    a running job's GPUs now: load and memory
-    jup logs JOB [-n LINES]         the end of a job's output
+    jup logs JOB [-n LINES] [-f]    the end of a job's output; -f: and what it
+                                    prints from then on, until it ends
     jup cancel JOB...
     jup budget                      what the account has left
     jup feedback NOTE... | --send FILE | --discard FILE
@@ -34,6 +35,7 @@ import os
 import re
 import shlex
 import shutil
+import signal
 import subprocess
 import sys
 import time
@@ -53,6 +55,8 @@ from jup.ssh import MARK, Remote
 POLL_SECONDS = 60
 # The least a caller may ask for.
 LEAST_POLL_SECONDS = 30
+# Seconds a followed job's last lines get to reach its files after it has ended.
+_SETTLE_SECONDS = 3
 # The launcher this code belongs to, to tell it from another `jup` on the PATH.
 LAUNCHER = Path(__file__).resolve().parents[2] / "bin" / "jup"
 # What `jup jobs` asks of squeue and of sacct, with a bar between the fields, and the
@@ -797,10 +801,36 @@ def run_gpus(arguments: Sequence[str], context: Context) -> int:
     return 0
 
 
+def _interrupt(signum: int, frame: object) -> None:
+    raise KeyboardInterrupt
+
+
+def follow_script(job: str, paths: Sequence[str], *, lines: int, poll: int) -> str:
+    """Return the script that prints `paths` as they grow, until `job` has ended.
+
+    It asks the queue every `poll` seconds. An answer that is no state ends it,
+    since Slurm then no longer knows the job, but not one that says the scheduler
+    was too slow: that happens under load and says nothing about the job.
+    """
+    files = " ".join(shlex.quote(path) for path in paths)
+    unfinished = "|".join(sorted(_UNFINISHED))
+    return (
+        # A terminal makes two characters of each line end.
+        "stty -onlcr 2>/dev/null; "
+        f"tail -n {lines} -F -- {files} & "
+        f'while :; do case "$(squeue --noheader --jobs={job} -o %T 2>&1)" in '
+        f"{unfinished}|*'timed out'*) sleep {poll} ;; *) break ;; esac; done; "
+        f"sleep {min(poll, _SETTLE_SECONDS)}; kill $!"
+    )
+
+
 def run_logs(arguments: Sequence[str], context: Context) -> int:
     parser = argparse.ArgumentParser(prog="jup logs")
     parser.add_argument("job")
     parser.add_argument("-n", "--lines", type=int, default=50)
+    parser.add_argument(
+        "-f", "--follow", action="store_true", help="go on until the job ends"
+    )
     options = parser.parse_args(arguments)
     job = check_job(options.job)
     shown = context.remote.execute(f"scontrol show job {job}")
@@ -815,6 +845,16 @@ def run_logs(arguments: Sequence[str], context: Context) -> int:
             "with `jup ssh -C 'tail -n 50 FILE'` (the script's --output names it; "
             "otherwise slurm-<job>.out where it was submitted)"
         )
+    if options.follow:
+        script = follow_script(job, paths[:8], lines=options.lines, poll=POLL_SECONDS)
+        # A helper that is told to end takes its ssh along, as Ctrl+C does: an ssh
+        # left alone goes on following.
+        previous = signal.signal(signal.SIGTERM, _interrupt)
+        try:
+            done = context.remote.execute(script, capture=False, terminal=True)
+        finally:
+            signal.signal(signal.SIGTERM, previous)
+        return done.returncode
     script = "; ".join(
         f"printf '==> %s\\n' {shlex.quote(path)}; "
         f"tail -n {options.lines} -- {shlex.quote(path)}"

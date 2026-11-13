@@ -29,6 +29,16 @@ def test_a_command_runs_in_a_login_shell_in_the_given_directory(run):
     assert "BatchMode=yes" in sent
 
 
+def test_a_command_gets_a_terminal_only_when_it_is_asked_for(run):
+    remote = Remote("cluster", run=run)
+    remote.execute("ls")
+    remote.execute("tail -F x", capture=False, terminal=True)
+
+    [plain, followed] = run.calls[-3], run.calls[-1]
+    assert "-tt" not in plain
+    assert followed.index("-tt") < followed.index("--")
+
+
 def test_the_host_never_stands_where_ssh_reads_options(run):
     remote = Remote("-oProxyCommand=x", run=run)
     remote.settings()

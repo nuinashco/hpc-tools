@@ -50,7 +50,7 @@ jup submit [--dry-run] [--stale-ok] SBATCH_ARGS...
 jup jobs [--days N]             queued, running and recent jobs, and what each runs
 jup wait JOB [--until-running]  print each state change until the job ends
 jup gpus JOB                    a running job's GPUs now: load and memory
-jup logs JOB [-n LINES]         the end of a job's output
+jup logs JOB [-n LINES] [-f]    the end of a job's output; -f: and what it prints from then on, until it ends
 jup cancel JOB...               stop jobs; says which had already ended
 jup budget [--raw]              the account's budget in node-hours and GPU-hours: granted, used, left
 jup feedback NOTE... | --digest REPORT | --send FILE | --discard FILE
