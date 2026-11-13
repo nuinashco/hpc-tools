@@ -47,7 +47,7 @@ jup push [--dry-run] [--all]    copy the project to the cluster
 jup pull PATTERN... [--to DIR] [--dry-run]
 jup cost SBATCH_ARGS...         what a submission would reserve and cost
 jup submit [--dry-run] [--stale-ok] SBATCH_ARGS...
-jup jobs [--days N]             queued, running and recent jobs
+jup jobs [--days N]             queued, running and recent jobs, and what each runs
 jup wait JOB [--until-running]  print each state change until the job ends
 jup gpus JOB                    a running job's GPUs now: load and memory
 jup logs JOB [-n LINES]         the end of a job's output
@@ -76,6 +76,11 @@ It needs Python 3.9 or later (the one that comes with Apple's command line tools
   names the files: the job would run the cluster's copy. `--stale-ok` submits that copy as it is. The comparison
   is the one of `jup push --dry-run` (size and time of each file, a few seconds); a directory on the cluster that
   no push made is not compared.
+- **Job names.** The submit skill has Claude name each run for what it is about, `PROJECT-METHOD-VARIANT`
+  (`codeagent-rl-ppo-clip01` in a repository `codeagent-rl`), passed with `--job-name=` at every submission,
+  since a script's own name is the same for every run of it. `jup submit` prints the name the job carries, and
+  a note when a run with arguments keeps the script's name. `jup jobs` shows beside each name the script and
+  arguments the job was submitted with (`RUNS`, from accounting's record of the submitted line).
 - **Exit codes** of `jup` itself are 64 and up (65 settings, 66 no connection, 68 a failure on the cluster,
   69 from `jup wait` for a job whose GPUs sit idle), and
   its messages start with `jup:`; `jup ssh` hands through the remote command's own code.

@@ -2,7 +2,7 @@
   "name": "jupiter",
   "displayName": "JUPITER",
   "description": "Work on JSC's JUPITER supercomputer from any project: check access, copy code, submit Slurm jobs with a cost check, watch them, read the budget, and report what the plugin got wrong",
-  "version": "0.6.0",
+  "version": "0.7.1",
   "author": {
     "name": "nuinashco"
   },

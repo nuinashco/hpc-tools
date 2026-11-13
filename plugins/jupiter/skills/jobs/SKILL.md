@@ -22,8 +22,11 @@ jup jobs              # the queue, then the last two days of finished jobs
 jup jobs --days 7
 ```
 
-The queue's last column says why a waiting job waits; the history's `State`, `Elapsed`
-and `ExitCode` say how a finished one ended.
+`NODELIST(REASON)` says why a waiting job waits; the history's `STATE`, `ELAPSED` and
+`EXIT` say how a finished one ended. `RUNS` is the script and arguments each job was
+submitted with, or its wrapped command, cut after 100 characters: it tells two jobs
+with one name apart. When you report on jobs, say what each runs, not only its name
+and number.
 
 ## Waiting for one
 

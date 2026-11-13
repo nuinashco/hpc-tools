@@ -9,7 +9,8 @@ Usage:
     jup pull PATTERN... [--to DIR] [--dry-run]
     jup cost SBATCH_ARGS...         what a submission would reserve and cost
     jup submit [--dry-run] [--stale-ok] SBATCH_ARGS...
-    jup jobs [--days N]             queued, running and recent jobs
+    jup jobs [--days N]             queued, running and recent jobs, and what
+                                    each runs
     jup wait JOB [--until-running] [--idle-ok]
                                     print each state change until the job ends, or
                                     until its GPUs sit idle (exit code 69)
@@ -54,10 +55,39 @@ POLL_SECONDS = 60
 LEAST_POLL_SECONDS = 30
 # The launcher this code belongs to, to tell it from another `jup` on the PATH.
 LAUNCHER = Path(__file__).resolve().parents[2] / "bin" / "jup"
-_QUEUE = "%.12i %.10P %.30j %.10T %.10M %.10l %.5D %R"
-_HISTORY = (
-    "JobID%12,JobName%30,Partition%10,State%14,Elapsed,Timelimit,NNodes%6,ExitCode,End"
+# What `jup jobs` asks of squeue and of sacct, with a bar between the fields, and the
+# heads it prints them under. `RUNS` is read from the last field of sacct.
+_QUEUE = "%i|%P|%j|%T|%M|%l|%D|%R"
+_QUEUE_HEADS = (
+    "JOBID",
+    "PARTITION",
+    "NAME",
+    "STATE",
+    "TIME",
+    "TIME_LIMIT",
+    "NODES",
+    "NODELIST(REASON)",
+    "RUNS",
 )
+_HISTORY = (
+    "JobID,JobName,Partition,State,Elapsed,Timelimit,NNodes,ExitCode,End,SubmitLine"
+)
+_HISTORY_HEADS = (
+    "JOBID",
+    "NAME",
+    "PARTITION",
+    "STATE",
+    "ELAPSED",
+    "TIME_LIMIT",
+    "NODES",
+    "EXIT",
+    "END",
+    "RUNS",
+)
+# Printed by the remote command: between queue and history, and for a failed sacct.
+_BREAK, _NO_HISTORY = "--", "!"
+# Characters shown of what a job runs.
+_RUNS_SHOWN = 100
 _OUTCOME = "JobID,State,Elapsed,ExitCode"
 # States in which sacct shows a job that has not ended (sacct(1), job state codes).
 _UNFINISHED = frozenset(
@@ -471,6 +501,20 @@ def run_submit(arguments: Sequence[str], context: Context) -> int:
         with contextlib.suppress(ValueError):
             inside = str(local.resolve().relative_to(config.root.resolve()))
             print(f"GPU load: {hooks.describe_load(inside, config)}")
+    # Slurm's own names: the script's file, or `wrap` for a wrapped command.
+    script = "" if wrapped else rest[0].rpartition("/")[2]
+    name = chosen.get("job-name") or script or "wrap"
+    if "job-name" not in options:
+        shared = ""
+        if wrapped:
+            shared = "no --job-name, so Slurm names this job `wrap`"
+        elif len(rest) > 1 or "=" in options.get("export", ""):
+            shared = f"this job is named {name}, like every run of {script}"
+        if shared:
+            print(
+                f"note: {shared}; pass --job-name=... to say what this run is about: "
+                "the method, then what is special here"
+            )
     if "dry-run" in options:
         print(f"would run in {context.target()}: {command}")
         return 0
@@ -482,8 +526,18 @@ def run_submit(arguments: Sequence[str], context: Context) -> int:
             "submitting again, since the job may be queued"
         )
     job = printed[-1].split(";")[0]
-    print(f"submitted job {job}; follow it with `jup wait {job}`")
+    print(f"submitted job {job}, named {name}; follow it with `jup wait {job}`")
     return 0
+
+
+def render_table(heads: Sequence[str], rows: Sequence[Sequence[str]]) -> str:
+    """Return rows under their heads, each column as wide as its widest cell."""
+    widths = [max(len(cell) for cell in column) for column in zip(heads, *rows)]
+    lines = []
+    for row in (heads, *rows):
+        cells = [cell.ljust(width) for cell, width in zip(row, widths)]
+        lines.append("  ".join(cells).rstrip())
+    return "\n".join(lines)
 
 
 def run_jobs(arguments: Sequence[str], context: Context) -> int:
@@ -493,10 +547,36 @@ def run_jobs(arguments: Sequence[str], context: Context) -> int:
     if options.days < 1:
         raise UserError("--days is 1 or more; write `jup jobs --days 7`")
     script = (
-        f"squeue --me -o {shlex.quote(_QUEUE)}; echo; "
-        f"sacct -X --starttime now-{options.days}days -o {_HISTORY}"
+        f"squeue --me -h -o {shlex.quote(_QUEUE)} && echo {_BREAK} && "
+        f"{{ sacct -X --starttime now-{options.days}days -n -P -o {_HISTORY} || "
+        f"echo {shlex.quote(_NO_HISTORY)}; }}"
     )
-    return context.remote.execute(script, capture=False).returncode
+    lines = context.remote.read_lines(script)
+    cut = lines.index(_BREAK) if _BREAK in lines else len(lines)
+    # The last field of each holds whatever is left: a reason, or the line submitted.
+    queued = [row for line in lines[:cut] if len(row := line.split("|", 7)) == 8]
+    past = [row for line in lines[cut + 1 :] if len(row := line.split("|", 9)) == 10]
+    runs = {}
+    for row in past:
+        what = slurm.describe_submission(row[9])
+        more = " ..." if len(what) > _RUNS_SHOWN else ""
+        runs[row[0]] = what[:_RUNS_SHOWN] + more
+    waiting = {row[0] for row in queued}
+    for row in queued:
+        row.append(runs.get(row[0], ""))
+    ended = [
+        [row[0], row[1], row[2], row[3].partition(" ")[0], *row[4:9], runs[row[0]]]
+        for row in past
+        if row[0] not in waiting
+    ]
+    print("queued and running:")
+    print(render_table(_QUEUE_HEADS, queued) if queued else "  none")
+    print(f"\nended in the last {options.days} days:")
+    if _NO_HISTORY in lines[cut + 1 :]:
+        print("  accounting (sacct) gave no answer: no history, and no RUNS above")
+    else:
+        print(render_table(_HISTORY_HEADS, ended) if ended else "  none")
+    return 0
 
 
 def read_outcome(

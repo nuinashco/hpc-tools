@@ -382,3 +382,30 @@ def test_a_flag_follows_the_cost_and_its_doubts():
     asked = replace(request({"nodes": "1"}), flags=("it asks for 1 of 4",))
 
     assert asked.describe(4).endswith("assumed); it asks for 1 of 4")
+
+
+@pytest.mark.parametrize(
+    ("line", "runs"),
+    [
+        (
+            "sbatch --parsable --account=proj --partition=booster --time=00:40:00 "
+            "--job-name=swe-grpo-sync scripts/jupiter/train.sbatch configs/sync.yaml",
+            "train.sbatch configs/sync.yaml",
+        ),
+        ("sbatch -N 1 -t 5 job.sbatch", "job.sbatch"),
+        (
+            "sbatch --export=ALL,ARGS=--shards 2 scripts/eval.sbatch batches/a.txt",
+            "2 scripts/eval.sbatch batches/a.txt",
+        ),
+        (
+            'sbatch --parsable -N 1 --wrap python -c "import torch"',
+            '--wrap python -c "import torch"',
+        ),
+        ("/usr/bin/sbatch --wrap=hostname -t 5", "--wrap hostname -t 5"),
+        ("sbatch --parsable --test-only", "--parsable --test-only"),
+        ("salloc -N 1 -t 30", "salloc -N 1 -t 30"),
+        ("", ""),
+    ],
+)
+def test_a_submitted_line_is_read_as_what_the_job_runs(line, runs):
+    assert slurm.describe_submission(line) == runs
