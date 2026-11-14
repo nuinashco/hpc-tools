@@ -89,21 +89,33 @@ class Remote:
                 f"Claude Code: `! ssh {self.host} true`), then repeat the command"
             )
 
-    def command(self, script: str, *, cwd: str | None = None) -> list[str]:
-        """Return the ssh command that runs `script` in a login shell there."""
+    def command(
+        self, script: str, *, cwd: str | None = None, terminal: bool = False
+    ) -> list[str]:
+        """Return the ssh command that runs `script` in a login shell there.
+
+        With `terminal` the script gets one, and so ends when this side does:
+        without it, what a stopped command left running there goes on.
+        """
         if cwd:
             script = f"cd {shlex.quote(cwd)} && {script}"
+        options = [*BATCH, "-tt"] if terminal else BATCH
         # A login shell, since `module` and `jutil` are set up by the profile.
-        return ["ssh", *BATCH, "--", self.host, f"bash -lc {shlex.quote(script)}"]
+        return ["ssh", *options, "--", self.host, f"bash -lc {shlex.quote(script)}"]
 
     def execute(
-        self, script: str, *, cwd: str | None = None, capture: bool = True
+        self,
+        script: str,
+        *,
+        cwd: str | None = None,
+        capture: bool = True,
+        terminal: bool = False,
     ) -> subprocess.CompletedProcess[str]:
         """Run `script` on the login node; return it finished, whatever its code."""
         self.need_connection()
         try:
             done = self.run(
-                self.command(script, cwd=cwd),
+                self.command(script, cwd=cwd, terminal=terminal),
                 capture_output=capture,
                 text=True,
                 errors="replace",

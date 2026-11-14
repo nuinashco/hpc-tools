@@ -75,9 +75,16 @@ connection is back, start the wait anew.
 ```bash
 jup logs JOB              # the end of its output and error files
 jup logs JOB -n 200
+jup logs JOB -f           # that, and what the job prints from then on, until it ends
 jup ssh -C 'tail -n 100 logs/NAME-JOB.out'     # by name, once Slurm has dropped the record
 jup ssh -C 'grep -n -i -m 20 "error\|traceback\|killed" logs/NAME-JOB.out'
 ```
+
+With `-f` the command ends when the job does, or when it is stopped, and leaves
+nothing running on the login node. It is what to give a user who wants to watch a job
+(`! jup logs JOB -f`). As a background command it holds one of the connection's
+sessions for as long as the job runs, so follow one job at a time. A job's file
+stays empty until the job prints: some scripts start services for minutes first.
 
 Read on the cluster with `tail` and `grep`; pull a log only when it has to be read
 whole. Slurm forgets where a job wrote a few minutes after it ended, and `jup logs`
